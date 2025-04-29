@@ -1,0 +1,186 @@
+# 无人机自动驾驶强化学习系统默认配置
+
+# 通用设置
+general:
+  seed: 42
+  device: xpu  # 使用 Intel XPU
+  debug: false
+  log_level: info
+  checkpoint_dir: checkpoints
+  log_dir: logs
+
+# 环境设置
+environment:
+  # AirSim 设置
+  airsim:
+    ip: 127.0.0.1
+    port: 41451
+    timeout_ms: 10000
+    vehicle_name: drone1
+    client_type: multirotor
+  
+  # 图像设置 - 保持原始分辨率
+  image:
+    use_rgb: true
+    use_depth: false
+    keep_original_resolution: true  # 保持AirSim返回的原始分辨率
+    frame_stack: 4  # 堆叠帧数量
+  
+  # 动作空间
+  action_space:
+    continuous: true
+    action_dim: 4  # x,y,z速度和偏航角速度
+    max_velocity: [3.0, 3.0, 3.0]  # m/s
+    max_yaw_rate: 45.0  # deg/s
+
+  # 状态空间
+  state_space:
+    use_position: true
+    use_velocity: true
+    use_acceleration: true
+    use_orientation: true
+    use_angular_velocity: false
+  
+  # 奖励设置
+  reward:
+    distance_weight: 1.0
+    velocity_weight: 0.5
+    orientation_weight: 0.3
+    energy_weight: 0.2
+    collision_penalty: 10.0
+    success_reward: 20.0
+    step_penalty: 0.01
+
+  # 终止条件
+  termination:
+    max_steps: 2000
+    success_distance_threshold: 1.0  # m
+
+# 在顶层也提供奖励设置（增强配置健壮性）
+reward:
+  distance_weight: 1.0
+  velocity_weight: 0.5
+  orientation_weight: 0.3
+  energy_weight: 0.2
+  collision_penalty: 10.0
+  success_reward: 20.0
+  step_penalty: 0.01
+
+# 模型设置
+model:
+  # 输入模块
+  input_module:
+    # 图像处理
+    image_processor:
+      backbone: efficientnet  # 可选: efficientnet, resnet, mobilenet
+      pretrained: true
+      feature_dim: 512
+      patch_size: 16  # 动态patch大小的初始值
+    
+    # 姿态编码器
+    pose_encoder:
+      input_dim: 12  # 速度(3), 加速度(3), 角度(3), 角速度(3)
+      hidden_dims: [64, 128]
+      output_dim: 256
+    
+    # 目标编码器
+    target_encoder:
+      input_dim: 3  # 距离(1), 相对方向(2)
+      hidden_dims: [32]
+      output_dim: 128
+  
+  # 多模态融合模块
+  fusion_module:
+    # 3D-Depthwise卷积
+    depthwise_conv:
+      spatial_kernel_size: 3
+      temporal_kernel_size: 3
+      channels: 512
+    
+    # Cross-modal Transformer
+    cross_attention:
+      num_heads: 8
+      hidden_dim: 512
+      dropout: 0.1
+      num_layers: 4
+    
+    # 记忆库
+    memory_bank:
+      memory_size: 32  # 记忆库大小 (时间步)
+      key_dim: 512
+      value_dim: 512
+      use_attention_retrieval: true
+  
+  # 策略模块
+  policy_module:
+    trunk_dim: 512  # 共享trunk的输出维度
+    
+    # Actor网络
+    actor:
+      hidden_dims: [256, 128]
+      activation: relu
+      log_std_min: -10
+      log_std_max: 2
+    
+    # Critic网络
+    critic:
+      hidden_dims: [256, 128]
+      activation: relu
+      num_critics: 2  # 双Q网络降低过估计
+
+# 算法设置
+algorithm:
+  name: sac  # Soft Actor-Critic
+  
+  # 基本设置
+  gamma: 0.99
+  tau: 0.005  # 目标网络软更新参数
+  alpha_lr: 3e-4
+  actor_lr: 3e-4
+  critic_lr: 3e-4
+  
+  # SAC特定设置
+  alpha: 0.2  # 初始熵系数
+  automatic_entropy_tuning: true
+  target_entropy_scale: 1.0
+  
+  # 优先经验回放
+  replay_buffer:
+    capacity: 1000000
+    use_per: true  # 使用优先经验回放
+    alpha: 0.6
+    beta: 0.4
+    beta_increment: 0.001
+  
+  # 辅助任务
+  auxiliary:
+    use_auxiliary: true
+    contrastive_weight: 0.1
+    reconstruction_weight: 0.1
+    pose_prediction_weight: 0.1
+  
+  # 泛化增强
+  regularization:
+    use_domain_randomization: true
+    use_noise_injection: true
+    use_frame_dropping: true
+
+# 训练设置
+training:
+  batch_size: 128
+  num_steps: 1000000
+  update_after: 1000
+  update_every: 50
+  num_updates: 1
+  eval_interval: 5000
+  save_interval: 10000
+  gradient_steps: 1
+  resume_training: false  # 是否从检查点恢复训练
+  checkpoint_path: ""  # 恢复训练的检查点路径
+
+# 评估设置
+evaluation:
+  num_episodes: 10
+  render: false
+  save_video: true
+  deterministic: true

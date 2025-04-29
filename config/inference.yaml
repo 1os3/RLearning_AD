@@ -1,0 +1,73 @@
+# 无人机自动驾驶强化学习系统 - 推理配置
+
+# 继承默认配置
+_inherit: default.yaml
+
+# 通用设置覆盖
+general:
+  seed: 1234  # 不同于训练的随机种子，确保评估一致性
+  device: xpu  # 使用 Intel XPU加速，可改为cuda使用NVIDIA GPU加速
+  log_level: info
+  debug: false
+  log_dir: logs/inference
+
+# 推理特定设置
+inference:
+  # 模型加载
+  model_path: ""               # 模型路径，空字符串会尝试加载最新模型
+  checkpoint_type: best        # 加载检查点类型: best, last
+  load_optimizer: false        # 是否加载优化器状态(推理时不需要)
+  
+  # 推理策略
+  deterministic: true          # 是否使用确定性策略（无噪声）
+  n_episodes: 10               # 运行多少回合
+  max_steps_per_episode: 2000  # 每回合最大步数
+  sleep_time: 0.0              # 每步之间的睡眠时间(秒)，便于可视化
+  
+  # 评估模式
+  evaluation_mode: true        # 是否运行评估
+  save_metrics: true           # 是否保存指标
+  compute_statistics: true     # 是否计算统计数据
+  generate_report: true        # 是否生成评估报告
+
+# 可视化设置
+visualization:
+  enabled: true                # 是否启用可视化
+  render_mode: human           # 渲染模式: human, rgb_array
+  save_video: true             # 是否保存视频
+  video_fps: 30                # 视频帧率
+  video_dir: videos            # 视频保存目录
+  use_overlay: true            # 是否添加信息叠加层
+  
+  # 可视化内容
+  show_attention: true         # 显示注意力热力图
+  show_actions: true           # 显示动作值
+  show_rewards: true           # 显示奖励值
+  show_q_values: true          # 显示Q值
+  show_trajectory: true        # 显示轨迹
+
+# 环境设置覆盖
+environment:
+  # 推理时的特定环境设置
+  termination:
+    max_steps: 2000            # 每回合最大步数
+    success_distance_threshold: 1.0  # 成功距离阈值
+  
+  # 逻辑设置
+  reset_on_collision: true     # 碰撞后是否重置环境
+  auto_reset: true             # 是否自动重置环境
+
+# 域随机化覆盖 - 推理时通常关闭或调低
+domain_randomization:
+  enabled: false               # 推理时关闭域随机化
+  
+  # 如果需要测试泛化性，可以启用并设置固定难度
+  curriculum_learning: false   # 关闭课程学习
+  fixed_difficulty: 0.5        # 固定的随机化强度
+
+# 日志与监控
+monitoring:
+  tensorboard: false           # 推理时不使用TensorBoard
+  save_attention_maps: true    # 保存注意力图
+  save_q_value_maps: true      # 保存Q值热力图
+  plot_results: true           # 绘制结果图表

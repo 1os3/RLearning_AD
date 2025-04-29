@@ -1,0 +1,115 @@
+# 无人机自动驾驶强化学习系统 - 训练配置
+
+# 继承默认配置
+_inherit: default.yaml
+
+# 通用设置覆盖
+general:
+  seed: 42
+  device: xpu  # 使用 Intel XPU加速，可改为cuda使用NVIDIA GPU加速
+  log_level: info
+  checkpoint_dir: checkpoints/training
+  log_dir: logs/training
+
+# 训练特定设置
+training:
+  # 训练基本参数
+  batch_size: 256
+  num_steps: 2000000           # 总训练步数
+  warmup_steps: 1000           # 预热步数，仅收集数据不进行优化
+  update_after: 1000           # 开始更新前的步数
+  update_every: 1              # 每多少步更新一次
+  num_updates: 1               # 每次更新多少次
+  gradient_steps: 1            # 每次更新多少次梯度步
+  seed: 42
+  
+  # 评估与保存
+  eval_interval: 5000          # 每多少步评估一次
+  eval_episodes: 5             # 每次评估的回合数
+  save_interval: 20000         # 每多少步保存模型
+  save_best_only: false        # 是否只保存最佳模型
+  max_checkpoints: 5           # 最多保存的检查点数量
+  
+  # 断点续训
+  resume_training: false       # 是否从检查点恢复训练
+  checkpoint_path: ""          # 恢复训练的检查点路径
+  
+  # 学习率调度
+  use_lr_scheduler: true       # 是否使用学习率调度器
+  lr_scheduler: cosine         # 学习率调度器类型: linear, cosine, step
+  lr_warmup_steps: 10000       # 学习率预热步数
+  lr_min_factor: 0.1           # 学习率最小缩放因子
+
+# 辅助任务调整
+algorithm:
+  # 基本算法参数
+  gamma: 0.99
+  tau: 0.005
+  
+  # 学习率调整
+  actor_lr: 3e-4
+  critic_lr: 3e-4
+  alpha_lr: 3e-4
+  
+  # SAC特定设置
+  automatic_entropy_tuning: true
+  target_entropy_scale: 0.98
+  
+  # 经验回放深度调整
+  replay_buffer:
+    capacity: 500000   # 回放缓冲区大小
+    use_per: true      # 使用优先经验回放
+    alpha: 0.6
+    beta: 0.4
+    beta_increment: 0.0001
+  
+  # 辅助任务权重
+  auxiliary:
+    use_auxiliary: true
+    contrastive_weight: 0.1    # 对比预测编码权重
+    reconstruction_weight: 0.05 # 帧重建权重
+    pose_prediction_weight: 0.05 # 姿态预测权重
+
+# 域随机化设置
+domain_randomization:
+  enabled: true
+  curriculum_learning: true    # 是否启用课程学习自适应调整难度
+  initial_difficulty: 0.1      # 初始随机化强度
+  max_difficulty: 1.0          # 最大随机化强度
+  adaptation_rate: 0.001       # 难度适应率
+  success_threshold: 0.7       # 提高难度的成功率阈值
+  
+  # 随机化类型
+  image:
+    enabled: true
+    brightness_range: [0.8, 1.2]
+    contrast_range: [0.8, 1.2]
+    noise_range: [0.0, 0.05]
+  
+  physics:
+    enabled: true
+    wind_speed_range: [0.0, 3.0]
+    wind_direction_range: [-180, 180]
+  
+  sensor:
+    enabled: true
+    camera_noise_range: [0.0, 0.01]
+    position_bias_range: [-0.05, 0.05]
+
+# 奖励调整
+environment:
+  reward:
+    distance_weight: 1.0
+    velocity_weight: 0.5
+    orientation_weight: 0.4
+    energy_weight: 0.2
+    collision_penalty: 5.0
+    success_reward: 20.0
+    step_penalty: 0.01
+
+# 日志与监控
+monitoring:
+  log_interval: 1000         # 日志输出间隔
+  tensorboard: true          # 是否使用TensorBoard
+  plot_interval: 10000       # 绘图间隔
+  video_interval: 50000      # 录制视频间隔

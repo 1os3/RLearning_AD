@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/xpu
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+opencv-python>=4.7.0
+gymnasium>=0.28.0
+airsim>=1.8.1
+torch>=2.6.0
+torchvision>=0.17.0
+tensorboard>=2.15.0
+pyyaml>=6.0.0
+tqdm>=4.65.0

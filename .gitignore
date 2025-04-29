@@ -1,0 +1,36 @@
+# Python virtual environment
+.venv/
+
+# AirSim related files
+AirSim/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# VS Code settings
+.vscode/
+
+# PyCharm settings
+.idea/
+
+# Training artifacts
+checkpoints/
+logs/
+
+# Environment specific
+.env
+*.log
+
+# System specific
+.DS_Store
+Thumbs.db
