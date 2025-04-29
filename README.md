@@ -237,7 +237,3 @@ training:
 
 **Q: TensorBoard未显示数据**  
 **A:** 检查日志路径，确认`logs/training`目录下有事件文件，重启TensorBoard服务
-
-## 参考文献
-
-本项目采用MIT许可证 - 详见LICENSE文件
