@@ -60,49 +60,60 @@ class Logger:
         Log a scalar value.
         
         Args:
-            name: Metric name (can include namespaces like 'train/loss')
-            value: Scalar value to log
+            name: Metric name
+            value: Scalar value
             step: Training step or episode number
         """
-        # Initialize container for this metric if needed
-        if name not in self.metrics:
-            self.metrics[name] = {'steps': [], 'values': []}
-        
-        # Add data point
-        self.metrics[name]['steps'].append(step if step is not None else len(self.metrics[name]['steps']))
-        self.metrics[name]['values'].append(value)
-        
-        # Log to TensorBoard if enabled
-        if self.use_tensorboard and self.tb_writer is not None:
-            self.tb_writer.add_scalar(name, value, step)
-        
-        # Update CSV log
-        namespace = name.split('/')[0] if '/' in name else 'default'
-        if namespace not in self.csv_logs:
-            self.csv_logs[namespace] = {'step': [], 'time': []}
-        
-        if step not in self.csv_logs[namespace]['step']:
-            self.csv_logs[namespace]['step'].append(step if step is not None else len(self.csv_logs[namespace]['step']))
-            self.csv_logs[namespace]['time'].append(time.time() - self.start_time)
-        
-        metric_name = name.split('/')[-1] if '/' in name else name
-        if metric_name not in self.csv_logs[namespace]:
-            # Backfill with NaN for previous steps
-            self.csv_logs[namespace][metric_name] = [np.nan] * (len(self.csv_logs[namespace]['step']) - 1)
-            self.csv_logs[namespace][metric_name].append(value)
-        else:
-            # Find the index of the current step
-            idx = self.csv_logs[namespace]['step'].index(step if step is not None else len(self.csv_logs[namespace]['step']) - 1)
+        try:
+            # Log to TensorBoard
+            if self.use_tensorboard and self.tb_writer is not None:
+                self.tb_writer.add_scalar(name, value, step)
             
-            # Ensure the list is long enough
-            while len(self.csv_logs[namespace][metric_name]) <= idx:
-                self.csv_logs[namespace][metric_name].append(np.nan)
+            # Store in memory for CSV logging
+            namespace = name.split('/')[0] if '/' in name else 'default'
+            metric_name = name.split('/')[-1] if '/' in name else name
             
-            # Update the value
-            self.csv_logs[namespace][metric_name][idx] = value
-        
-        # Save CSVs periodically
-        self._save_csvs()
+            # 初始化namespace如果需要
+            if namespace not in self.csv_logs:
+                self.csv_logs[namespace] = {'step': []}
+            
+            # 初始化metric如果需要
+            if metric_name not in self.csv_logs[namespace]:
+                self.csv_logs[namespace][metric_name] = []
+            
+            # 添加新的step
+            curr_step = step if step is not None else len(self.csv_logs[namespace]['step'])
+            
+            # 如果是新的step
+            if curr_step not in self.csv_logs[namespace]['step']:
+                # 添加新的step到列表
+                self.csv_logs[namespace]['step'].append(curr_step)
+                # 确保所有指标的数组长度一致 
+                for key in self.csv_logs[namespace]:
+                    if len(self.csv_logs[namespace][key]) < len(self.csv_logs[namespace]['step']):
+                        # 填充NaN直到数组长度一致
+                        self.csv_logs[namespace][key].extend([np.nan] * 
+                                               (len(self.csv_logs[namespace]['step']) - len(self.csv_logs[namespace][key])))
+            
+            # 找到当前step的索引
+            try:
+                idx = self.csv_logs[namespace]['step'].index(curr_step)
+                # 更新值
+                if len(self.csv_logs[namespace][metric_name]) <= idx:
+                    # 确保数组足够长
+                    self.csv_logs[namespace][metric_name].extend([np.nan] * (idx + 1 - len(self.csv_logs[namespace][metric_name])))
+                self.csv_logs[namespace][metric_name][idx] = value
+            except ValueError:
+                # 如果没有找到step，将其添加到列表末尾
+                self.csv_logs[namespace]['step'].append(curr_step)
+                self.csv_logs[namespace][metric_name].append(value)
+            
+            # 每10次调用保存一次CSV，减少IO操作
+            if sum(len(data['step']) for data in self.csv_logs.values()) % 10 == 0:
+                self._save_csvs()
+        except Exception as e:
+            # 捕获并打印错误，但不中断训练
+            print(f"警告: 日志记录出错 ({name}, {value}, {step}): {e}")
     
     def log_histogram(self, name: str, values: np.ndarray, step: Optional[int] = None):
         """
@@ -190,8 +201,25 @@ class Logger:
     def _save_csvs(self):
         """Save metrics to CSV files."""
         for namespace, data in self.csv_logs.items():
-            df = pd.DataFrame(data)
-            df.to_csv(os.path.join(self.log_dir, f'{namespace}_metrics.csv'), index=False)
+            try:
+                # 防止数组长度不一致错误
+                # 首先确定最大长度
+                max_length = max([len(arr) for arr in data.values()])
+                
+                # 填充所有数组到同样的长度
+                normalized_data = {}
+                for key, values in data.items():
+                    if len(values) < max_length:
+                        # 用NaN填充使数组长度相同
+                        normalized_data[key] = values + [np.nan] * (max_length - len(values))
+                    else:
+                        normalized_data[key] = values
+                
+                # 创建DataFrame并保存
+                df = pd.DataFrame(normalized_data)
+                df.to_csv(os.path.join(self.log_dir, f'{namespace}_metrics.csv'), index=False)
+            except Exception as e:
+                print(f"警告: 保存{namespace}CSV数据时出错: {e}")
     
     def close(self):
         """Close logger and write all pending data."""

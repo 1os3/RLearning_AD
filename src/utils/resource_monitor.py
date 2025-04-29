@@ -43,15 +43,25 @@ class ResourceMonitor:
     def _monitor_resources(self):
         """监控资源的线程函数"""
         while self.running:
-            # 获取当前资源使用情况
-            metrics = self.get_resource_metrics()
-            
-            # 记录到日志（如果有日志器）
-            if self.logger:
-                self.steps += 1
-                for key, value in metrics.items():
-                    self.logger.log_scalar(f"resources/{key}", value, self.steps)
-            
+            try:
+                # 获取当前资源使用情况
+                metrics = self.get_resource_metrics()
+                
+                # 记录到日志（如果有日志器）
+                if self.logger:
+                    self.steps += 1
+                    # 创建单独的指标副本，避免在迭代过程中修改
+                    metrics_copy = metrics.copy()
+                    for key, value in metrics_copy.items():
+                        try:
+                            # 对每个单独的日志记录操作单独进行异常处理
+                            self.logger.log_scalar(f"resources/{key}", value, self.steps)
+                        except Exception as e:
+                            print(f"警告: 记录资源指标 {key} 时出错: {e}")
+            except Exception as e:
+                # 捕获所有异常，确保监控线程不会崩溃
+                print(f"警告: 资源监控出现错误: {e}")
+                
             # 等待下一个间隔
             time.sleep(self.interval)
     
