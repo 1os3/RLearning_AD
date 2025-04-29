@@ -251,9 +251,9 @@ def main():
     # Setup logger
     logger = Logger(log_dir)
     
-    # 创建并启动资源监控器
-    resource_monitor = ResourceMonitor(logger=logger, interval=5)  # 每5秒记录一次资源使用情况
-    resource_monitor.start()
+    # 资源监控已禁用
+    # resource_monitor = ResourceMonitor(logger=logger, interval=5)
+    # resource_monitor.start()
     
     # Create environment
     env = AirSimUAVEnvironment(config['environment'])
@@ -427,8 +427,8 @@ def main():
             
             print(f"Evaluation at step {step + 1}: Mean Reward: {eval_results['mean_reward']:.2f}")
     
-    # 停止资源监控
-    resource_monitor.stop()
+    # 资源监控已禁用
+    # resource_monitor.stop()
     
     # Final save and evaluation
     agent.save(save_dir)
