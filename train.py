@@ -6,6 +6,8 @@ import numpy as np
 import torch
 import random
 import gc
+import os
+import csv
 from pathlib import Path
 from datetime import datetime
 
@@ -329,6 +331,18 @@ def main():
         # 将terminated和truncated合并为done标志
         done = terminated or truncated
         
+        # 每隔一定步数记录详细奖励组件
+        if step % 1000 == 0 and 'reward_components' in info:
+            reward_components = info['reward_components']
+            for key, value in reward_components.items():
+                logger.log_scalar(f"reward/{key}", value, step)
+            
+            # 在控制台中打印奖励组件
+            if step % 5000 == 0:  # 每5000步打印一次详细信息
+                print(f"\n奖励组件 (Step {step}):")
+                for key, value in reward_components.items():
+                    print(f"  - {key}: {value:.4f}")
+        
         # Store transition in replay buffer
         # Convert to tensors - 注意处理字典类垏observation
         # 检查state是否为字典类垏（环境返回的复合观测）
@@ -419,6 +433,17 @@ def main():
             logger.log_scalar("train/episode_reward", current_episode_reward, step)
             logger.log_scalar("train/episode_length", current_episode_length, step)
             
+            # 记录最后一步的奖励详情到日志
+            print(f"\n奖励详情 (Episode {episode_count}): 总奖励={current_episode_reward:.4f}")
+            
+            # 如果还有最后一步的奖励组件信息，也输出出来
+            if 'reward_components' in info:
+                reward_components = info['reward_components']
+                for key, value in reward_components.items():
+                    print(f"  - {key}: {value:.4f}")
+                    
+            reward_csv_data = {"step": step, "episode": episode_count, "total_reward": current_episode_reward}
+            
             # Reset episode stats
             current_episode_reward = 0
             current_episode_length = 0
@@ -431,6 +456,32 @@ def main():
                 mean_length = np.mean(episode_lengths[-10:])
                 print(f"Episode {episode_count}, Step {step}/{total_steps}, "
                       f"Mean Reward: {mean_reward:.2f}, Mean Length: {mean_length:.2f}")
+                
+                # 将奖励统计数据保存到CSV
+                try:
+                    # 确保奖励日志目录存在
+                    reward_log_dir = os.path.join(log_dir, 'reward_logs')
+                    os.makedirs(reward_log_dir, exist_ok=True)
+                    
+                    # 奖励统计CSV文件路径
+                    reward_stats_path = os.path.join(reward_log_dir, 'reward_stats.csv')
+                    
+                    # 定义或更新CSV头
+                    header = ['episode', 'step', 'mean_reward', 'mean_length']
+                    row = [episode_count, step, mean_reward, mean_length]
+                    
+                    # 写入CSV
+                    if not os.path.exists(reward_stats_path):
+                        with open(reward_stats_path, 'w', newline='') as f:
+                            writer = csv.writer(f)
+                            writer.writerow(header)
+                            writer.writerow(row)
+                    else:
+                        with open(reward_stats_path, 'a', newline='') as f:
+                            writer = csv.writer(f)
+                            writer.writerow(row)
+                except Exception as e:
+                    print(f"警告: 保存奖励统计数据时出错: {e}")
         else:
             # Continue to next step
             state = next_state

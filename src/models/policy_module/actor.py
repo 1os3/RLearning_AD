@@ -48,15 +48,17 @@ class Actor(nn.Module):
         elif isinstance(config, dict) and 'trunk_dim' in config:
             self.trunk_dim = config.get('trunk_dim', 512)
         
-        # 打印配置信息便于调试
-        print(f"Actor 参数: trunk_dim={self.trunk_dim}")
-        self.hidden_dims = config.get('hidden_dims', [256, 128])
-        self.activation_name = config.get('activation', 'relu')
-        self.log_std_min = config.get('log_std_min', -10)
-        self.log_std_max = config.get('log_std_max', 2)
+        # 获取参数
+        # 从配置文件中获取trunk_dim
+        self.trunk_dim = config.get('trunk_dim', 768)  # 默认值与配置文件中的新值相同
         
-        # 设置默认的动作空间维度
-        self.action_dim = 4  # 默认为4维动作：[vx, vy, vz, yaw_rate]
+        print(f"Actor 参数: trunk_dim={self.trunk_dim}")
+        # 从配置中获取动作空间维度，不再重复设置
+        self.action_dim = config.get('action_dim', 4)  # 默认为4维动作：[vx, vy, vz, yaw_rate]
+        self.hidden_dims = config.get('hidden_dims', [512, 384, 256])  # 更新默认值与配置文件一致
+        self.log_std_min = config.get('log_std_min', -20)  # 最小对数标准差
+        self.log_std_max = config.get('log_std_max', 2)     # 最大对数标准差
+        self.activation_name = config.get('activation', 'relu')  # 添加激活函数配置
         
         # 如果配置中有action_dim，则使用配置的值
         if isinstance(config, dict) and 'action_dim' in config:
@@ -194,7 +196,21 @@ class SharedTrunkActor(nn.Module):
         super().__init__()
         
         self.trunk = trunk_network
-        self.actor = Actor(actor_config)
+        
+        # 获取trunk_network的输出维度
+        if hasattr(trunk_network, 'trunk_dim'):
+            trunk_dim = trunk_network.trunk_dim
+        else:
+            trunk_dim = 768  # 默认与配置文件一致
+        
+        # 确保将trunk_dim添加到actor_config中
+        if actor_config is None:
+            actor_config = {}
+        actor_config_copy = actor_config.copy()  # 创建副本避免修改原始配置
+        actor_config_copy['trunk_dim'] = trunk_dim
+        
+        # 创建Actor实例并传入正确的trunk_dim
+        self.actor = Actor(actor_config_copy)
     
     def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor]:
         """

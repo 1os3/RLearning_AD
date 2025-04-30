@@ -84,9 +84,15 @@ class Critic(nn.Module):
             self.activation_name = config.get('activation', self.activation_name)
             self.action_dim = config.get('action_dim', self.action_dim)
         
-        # 打印参数信息便于调试
-        print(f"Critic 参数: trunk_dim={self.trunk_dim}, "
-              f"action_dim={self.action_dim}, hidden_dims={self.hidden_dims}")
+        # 获取参数
+        # 从配置中获取trunk_dim
+        self.trunk_dim = config.get('trunk_dim', 768)  # 默认值与配置文件中的新值相同
+        
+        self.action_dim = config.get('action_dim', 4)
+        self.hidden_dims = config.get('hidden_dims', [512, 384, 256])  # 更新举配置文件的默认值一致
+        self.num_critics = config.get('num_critics', 2)  # 使用双Q网络以降低Q值过估计
+        
+        print(f"Critic 参数: trunk_dim={self.trunk_dim}, action_dim={self.action_dim}, hidden_dims={self.hidden_dims}")
         
         # Set activation function
         if self.activation_name == 'relu':
@@ -222,7 +228,21 @@ class SharedTrunkCritic(nn.Module):
         super().__init__()
         
         self.trunk = trunk_network
-        self.critics = TwinCritic(critic_config)
+        
+        # 获取trunk_network的输出维度
+        if hasattr(trunk_network, 'trunk_dim'):
+            trunk_dim = trunk_network.trunk_dim
+        else:
+            trunk_dim = 768  # 默认与配置文件一致
+        
+        # 确保将trunk_dim添加到critic_config中
+        if critic_config is None:
+            critic_config = {}
+        critic_config_copy = critic_config.copy()  # 创建副本避免修改原始配置
+        critic_config_copy['trunk_dim'] = trunk_dim
+        
+        # 创建TwinCritic实例并传入正确的trunk_dim
+        self.critics = TwinCritic(critic_config_copy)
     
     def forward(self, state, action: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """

@@ -64,9 +64,15 @@ class SAC:
         self.actor = self.ac_network.actor
         self.critic = self.ac_network.critic
         
-        # Target critic network - hard copy of critic
-        self.target_critic = SharedTrunkCritic(SharedTrunk(policy_config).to(device), 
-                                             policy_config.get('critic', {})).to(device)
+        # Target critic network - 创建方式和参数需与主critic保持一致
+        # 使用与主网络相同维度参数的trunk，确保维度匹配
+        target_trunk = SharedTrunk(policy_config).to(device)
+        target_trunk.trunk_dim = self.ac_network.trunk.trunk_dim  # 确保维度一致
+        
+        # 使用统一的critic配置，确保维度一致
+        self.target_critic = SharedTrunkCritic(target_trunk, 
+                                              policy_config.get('critic', {})).to(device)
+        # 硬拷贝参数
         self.hard_update(self.target_critic, self.critic)
         
         # Freeze target critic

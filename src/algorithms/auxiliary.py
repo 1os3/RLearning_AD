@@ -43,10 +43,11 @@ class ContrastivePredictiveCoding(nn.Module):
             self.use_gru = config.get('use_gru', True)
         else:
             # Default values if config is not provided or is not a dictionary
-            self.embedding_dim = 256
-            self.hidden_dim = 256
-            self.output_dim = 256
-            self.num_negative_samples = 10
+            # 与配置文件保持一致的默认值
+            self.embedding_dim = 384
+            self.hidden_dim = 384
+            self.output_dim = 512
+            self.num_negative_samples = 32
             self.temperature = 0.1
             self.use_gru = True
         
@@ -189,14 +190,16 @@ class FrameReconstruction(nn.Module):
             # 使用实际的状态维度而不是预定义的512
             self.state_dim = config.get('state_dim', 15)  # 实际特征维度是9维状态+6维目标=15维
             self.action_dim = config.get('action_dim', 4)  # Action dimension
-            self.hidden_dims = config.get('hidden_dims', [64, 128, 256])
+            # 更新为与配置文件一致的隐藏层维度
+            self.hidden_dims = config.get('hidden_dims', [128, 256, 384])
             self.output_dim = config.get('output_dim', 15)  # 输出维度也应与状态维度一致
             self.use_l2_loss = config.get('use_l2_loss', True)  # Use L2 or L1 loss
         else:
             # Default values if config is not provided or is not a dictionary
             self.state_dim = 15  # 实际特征维度是9维状态+6维目标=15维
             self.action_dim = 4
-            self.hidden_dims = [64, 128, 256]
+            # 更新为与配置文件一致的隐藏层维度
+            self.hidden_dims = [128, 256, 384]
             self.output_dim = 15
             self.use_l2_loss = True
             
@@ -300,14 +303,16 @@ class PoseRegression(nn.Module):
             self.state_dim = config.get('state_dim', 15)  # 实际特征维度是9维状态+6维目标=15维
             self.action_dim = config.get('action_dim', 4)  # Action dimension
             self.pose_dim = config.get('pose_dim', 9)  # Pose dimension (position, orientation, velocity)
-            self.hidden_dims = config.get('hidden_dims', [64, 128, 256])
+            # 更新为与配置文件一致的隐藏层维度
+            self.hidden_dims = config.get('hidden_dims', [128, 256, 384])
             self.normalize_targets = config.get('normalize_targets', True)  # Normalize regression targets
         else:
             # Default values if config is not provided or is not a dictionary
             self.state_dim = 15  # 实际特征维度是9维状态+6维目标=15维
             self.action_dim = 4
             self.pose_dim = 9
-            self.hidden_dims = [64, 128, 256]
+            # 更新为与配置文件一致的隐藏层维度
+            self.hidden_dims = [128, 256, 384]
             self.normalize_targets = True
             
         print(f"PoseRegression辅助任务输入维度: {self.state_dim + self.action_dim}, 输出维度: {self.pose_dim}")

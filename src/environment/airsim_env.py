@@ -30,6 +30,10 @@ class AirSimDroneEnv(gym.Env):
             config: Path to configuration YAML file or configuration dictionary
             evaluation: Whether this environment is used for evaluation
         """
+        # 存储一些已知的障碍物区域位置，避免生成目标点在障碍物附近
+        # 格式：[(min_x, min_y, min_z, max_x, max_y, max_z)]
+        self.obstacle_regions = []
+        
         # Load config
         if config is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
@@ -225,18 +229,109 @@ class AirSimDroneEnv(gym.Env):
         # Combine all spaces into a Dict space
         self.observation_space = spaces.Dict(observation_spaces)
     
-    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[Dict, Dict]:
+    def _is_in_obstacle_region(self, position: np.ndarray) -> bool:
         """
-        Reset environment to initial state.
+        检查位置是否在障碍物区域内。
+        
+        Args:
+            position: 要检查的位置坐标
+            
+        Returns:
+            如果在障碍物区域内则返回true
+        """
+        for obstacle in self.obstacle_regions:
+            min_x, min_y, min_z, max_x, max_y, max_z = obstacle
+            if (min_x <= position[0] <= max_x and 
+                min_y <= position[1] <= max_y and 
+                min_z <= position[2] <= max_z):
+                return True
+        return False
+    
+    def _check_obstacle_nearby(self, position: np.ndarray, radius: float = 5.0) -> bool:
+        """
+        检测指定位置附近是否有障碍物。
+        使用以下方法：
+        1. 首先检查静态障碍物区域
+        2. 尝试使用距离探测（如果AirSim支持）
+        3. 根据上次碰撞位置评估安全性
+        
+        Args:
+            position: 要检查的位置
+            radius: 检测半径，默认5m
+            
+        Returns:
+            如果有障碍物在位置附近返回true
+        """
+        # 1. 首先检查静态障碍物区域
+        if self._is_in_obstacle_region(position):
+            return True
+            
+        # 2. 检查与已知碰撞位置的距离
+        try:
+            # 如果我们有之前的碰撞信息，使用它来评估安全性
+            if hasattr(self, 'last_collision_position') and self.last_collision_position is not None:
+                collision_pos = np.array(self.last_collision_position)
+                dist_to_collision = np.linalg.norm(position - collision_pos)
+                if dist_to_collision < radius * 1.5:  # 使用更大的安全边界
+                    return True
+                    
+            # 3. 检查当前位置是否安全（不在碰撞状态）
+            # 获取当前碰撞信息
+            collision_info = self.client.simGetCollisionInfo()
+            if collision_info.has_collided:
+                # 记录这个位置作为不安全区域
+                collision_pos = collision_info.position
+                self.last_collision_position = [collision_pos.x_val, collision_pos.y_val, collision_pos.z_val]
+                # 当前有碰撞，这个区域不安全
+                return True
+                
+            # 4. 使用LiDAR API尝试检测障碍物（如果可用）
+            # 注意：这可能在某些AirSim版本中不可用
+            try:
+                lidar_data = self.client.getLidarData()
+                if len(lidar_data.point_cloud) > 3:
+                    # 点云数据是一个1D数组，每3个值代表一个点的(x,y,z)
+                    points = np.array(lidar_data.point_cloud).reshape(-1, 3)
+                    
+                    # 将位置转换为AirSim坐标系
+                    drone_pos = np.array([lidar_data.pose.position.x_val, 
+                                      lidar_data.pose.position.y_val, 
+                                      lidar_data.pose.position.z_val])
+                    
+                    # 计算每个点到目标位置的距离
+                    dist_to_target = np.linalg.norm(points - position, axis=1)
+                    
+                    # 如果任何一个点距离目标太近，认为有障碍物
+                    if np.any(dist_to_target < radius):
+                        return True
+            except Exception as lidar_error:
+                # LiDAR API可能不可用，忽略错误
+                pass
+            
+            # 没有检测到障碍物
+            return False
+            
+        except Exception as e:
+            # 如果任何探测失败，打印警告，保守地假设区域安全
+            print(f"警告: 执行障碍物检测时出错: {e}")
+            return False  # 假设安全，继续执行
+    
+    def reset(self, seed=None, options=None) -> Tuple[Dict[str, Any], Dict]:
+        """
+        Reset environment state.
         
         Args:
             seed: Random seed for reproducibility
-            options: Additional options for reset
+            options: Optional configuration dictionary
             
         Returns:
-            Initial observation and info dict
+            Initial observation and info dictionary
         """
-        super().reset(seed=seed)
+        # 在重置时清除初始高度记录，确保每次重置均使用新的初始高度
+        if hasattr(self, '_initial_height'):
+            delattr(self, '_initial_height')
+            
+        super().reset(seed=seed)  # Reset parent (Gymnasium env)
         
         if seed is not None:
             np.random.seed(seed)
@@ -255,12 +350,97 @@ class AirSimDroneEnv(gym.Env):
         self.collision_info = None
         self.done = False
         
-        # Generate random target position (within reasonable bounds)
-        # For simplicity we're setting a random target within a box
-        # In a real-world scenario, this would be provided by a planning system
-        bound = 50.0  # meters
-        self.target_position = np.random.uniform(-bound, bound, size=3)
-        self.target_position[2] = -np.abs(self.target_position[2])  # Ensure negative z (AirSim convention)
+        # 从配置中获取目标点采样参数
+        target_sampling_config = {}
+        
+        # 尝试不同的配置路径
+        if 'environment' in self.config and 'target_sampling' in self.config['environment']:
+            target_sampling_config = self.config['environment']['target_sampling']
+        elif 'target_sampling' in self.config:
+            target_sampling_config = self.config['target_sampling']
+        
+        # 安全获取参数，提供默认值
+        xy_min = target_sampling_config.get('xy_min', -50.0)
+        xy_max = target_sampling_config.get('xy_max', 50.0)
+        z_min = target_sampling_config.get('z_min', -20.0)  # AirSim中负值表示向上
+        z_max = target_sampling_config.get('z_max', -50.0)  # 高空目标
+        min_distance = target_sampling_config.get('min_distance', 20.0)
+        max_distance = target_sampling_config.get('max_distance', 80.0)
+        
+        # 获取当前位置
+        drone_state = self.client.getMultirotorState()
+        current_position = drone_state.kinematics_estimated.position
+        initial_position = np.array([current_position.x_val, current_position.y_val, current_position.z_val])
+        
+        # 生成目标点，确保与初始点保持合适距离
+        max_attempts = 50  # 防止无限循环
+        attempt = 0
+        valid_target = False
+        
+        while not valid_target and attempt < max_attempts:
+            # 生成XY平面坐标
+            x = np.random.uniform(xy_min, xy_max)
+            y = np.random.uniform(xy_min, xy_max)
+            
+            # 生成Z坐标（高度）
+            # 注意：AirSim中负值表示向上，所以z_min通常大于z_max
+            z = np.random.uniform(min(z_min, z_max), max(z_min, z_max))
+            
+            # 拼接目标点
+            target_pos = np.array([x, y, z])
+            
+            # 计算与初始点的距离
+            distance_to_initial = np.linalg.norm(target_pos - initial_position)
+            
+            # 验证距离是否在合适范围内，并检查是否距离障碍物足够远
+            if min_distance <= distance_to_initial <= max_distance:
+                # 检查目标点附近是否有障碍物
+                obstacle_nearby = self._check_obstacle_nearby(target_pos, radius=6.0)  # 使用6m的安全距离，更保守
+                
+                if not obstacle_nearby:
+                    valid_target = True
+                    self.target_position = target_pos
+                else:
+                    print(f"  目标点 [{target_pos[0]:.1f}, {target_pos[1]:.1f}, {target_pos[2]:.1f}] 附近存在障碍物，重新采样")
+            
+            attempt += 1
+        
+        # 如果多次尝试后仍找不到合适目标，使用备选方案
+        if not valid_target:
+            print("警告: 无法在合适范围内生成目标点，使用备选方案")
+            
+            # 尝试不同的方向，找到一个无障碍物的方向
+            for _ in range(8):  # 尝试8个不同方向
+                # 生成随机方向
+                direction = np.random.uniform(-1, 1, size=3)
+                direction = direction / np.linalg.norm(direction)
+                test_target = initial_position + direction * min_distance * 1.5
+                # 确保高度在合理范围内
+                test_target[2] = np.clip(test_target[2], min(z_min, z_max), max(z_min, z_max))
+                
+                # 检查这个方向是否距障碍物足够远
+                if not self._check_obstacle_nearby(test_target, radius=4.0):
+                    self.target_position = test_target
+                    valid_target = True
+                    print(f"  找到合适的无障碍物方向，使用备选目标点")
+                    break
+            
+            # 如果仍然找不到无障碍物的方向，使用高空目标
+            if not valid_target:
+                print(f"  所有方向都有障碍物，使用更高高度的目标点")
+                # 生成一个基本目标点，但设置更高的高度
+                direction = np.random.uniform(-1, 1, size=2)  # 只生成XY平面方向
+                direction = np.append(direction, 0)  # 添加Z=0
+                direction = direction / np.linalg.norm(direction)
+                self.target_position = initial_position + direction * min_distance * 1.2
+                # 更高的高度，超出正常范围但仍如正常可达
+                higher_altitude = min(z_min, z_max) * 1.5  # 更高的高度，注意负值表示向上
+                self.target_position[2] = higher_altitude
+        
+        # 打印目标信息
+        distance_to_target = np.linalg.norm(self.target_position - initial_position)
+        print(f"生成目标点: [{self.target_position[0]:.1f}, {self.target_position[1]:.1f}, {self.target_position[2]:.1f}], "
+              f"与起始点距离: {distance_to_target:.1f}m")
         
         # 转换目标位置为标准Python类型，避免AirSim接口调用时出现序列化问题
         self.target_position = [float(x) for x in self.target_position]
@@ -311,6 +491,10 @@ class AirSimDroneEnv(gym.Env):
         
         # Add reward info to info dict
         info.update(reward_info)
+        
+        # 添加分解的奖励组件到info中，更方便日志记录
+        info['reward'] = reward
+        info['reward_components'] = reward_info
         
         return observation, reward, terminated, truncated, info
     
@@ -621,6 +805,7 @@ class AirSimDroneEnv(gym.Env):
         collision_penalty = reward_config.get('collision_penalty', 10.0)
         success_reward = reward_config.get('success_reward', 20.0)
         step_penalty = reward_config.get('step_penalty', 0.01)
+        height_penalty = reward_config.get('height_penalty', 5.0)  # 高度惩罚权重
         
         # Calculate reward components
         reward_components = {}
@@ -635,6 +820,68 @@ class AirSimDroneEnv(gym.Env):
         velocity_projection = np.dot(velocity_vector, target_direction)
         reward_components['velocity'] = velocity_projection * velocity_weight
         
+        # 检查当前高度是否超过初始高度太多
+        # 获取初始高度，如果在重置时没有存储，则存储当前高度
+        if not hasattr(self, '_initial_height'):
+            self._initial_height = current_position[2]  # Z坐标为高度
+            print(f"\n初始高度设置为: {self._initial_height:.2f}")
+            
+        # 计算高度差值 - 在AirSim中，负值表示向上，所以我们需要考虑符号
+        # 由于高度增加会让z值变得更负，所以使用初始高度-当前高度
+        # 这样，当飞行器上升时，高度差为正号，下降时为负号
+        height_diff = self._initial_height - current_position[2]  # 正值表示当前高度高于初始高度
+        
+        # 计算与目标高度的差值
+        target_height_diff = 0.0
+        if isinstance(self.target_position, np.ndarray):
+            target_height_diff = self.target_position[2] - current_position[2]  # 正值表示远离目标
+        else:
+            target_height_diff = self.target_position[2] - current_position[2]  # 正值表示远离目标
+        
+        # 打印当前高度信息（每100步打印一次）
+        if self.step_count % 100 == 0:
+            print(f"\n当前高度: {current_position[2]:.2f}, 初始高度: {self._initial_height:.2f}, "
+                  f"高度差值: {height_diff:.2f}, 目标高度差值: {target_height_diff:.2f}")
+        
+        # 高度惩罚逻辑：
+        # 1. 如果无人机与初始高度差大于50m，给予惩罚
+        # 2. 如果无人机与初始高度差小于-20m，给予惩罚
+        # 3. 如果无人机与目标高度差超过30m，给予額外惩罚
+        
+        height_penalty_value = 0.0
+        
+        # 高空惩罚 - 高于初始位置50m
+        if height_diff > 50.0:  
+            excess_height = height_diff - 50.0
+            high_altitude_penalty = excess_height * height_penalty / 10.0
+            height_penalty_value -= high_altitude_penalty
+            
+            # 打印高空惩罚详情
+            if high_altitude_penalty > 0.01:
+                print(f"  高空惩罚: {high_altitude_penalty:.4f}, 超高: {excess_height:.2f}m")
+            
+        # 低空惩罚 - 低于初始位置20m
+        if height_diff < -20.0:  
+            deficit_height = abs(height_diff) - 20.0
+            low_altitude_penalty = deficit_height * height_penalty / 5.0
+            height_penalty_value -= low_altitude_penalty
+            
+            # 打印低空惩罚详情
+            if low_altitude_penalty > 0.01:
+                print(f"  低空惩罚: {low_altitude_penalty:.4f}, 下降过度: {deficit_height:.2f}m")
+            
+        # 与目标高度相差过大的惩罚
+        if abs(target_height_diff) > 30.0:  
+            target_height_excess = abs(target_height_diff) - 30.0
+            target_height_penalty = target_height_excess * height_penalty / 20.0
+            height_penalty_value -= target_height_penalty
+            
+            # 打印目标高度差异惩罚详情
+            if target_height_penalty > 0.01:
+                print(f"  目标高度差异惩罚: {target_height_penalty:.4f}, 高度差: {target_height_excess:.2f}m")
+        
+        reward_components['height_penalty'] = height_penalty_value
+        
         # Orientation reward - reward for facing the target
         _, _, yaw = airsim.to_eularian_angles(orientation)
         heading_vector = np.array([math.cos(yaw), math.sin(yaw), 0])
@@ -647,7 +894,30 @@ class AirSimDroneEnv(gym.Env):
         energy_usage = np.sum(np.square(action))
         reward_components['energy'] = -energy_usage * energy_weight
         
-        # Collision penalty
+        # 改进碰撞检测和惩罚
+        # 更精确地检测碰撞，包括检查碰撞对象和碰撞位置
+        collision_info_str = ''
+        if collision and hasattr(self.collision_info, 'object_name') and self.collision_info.object_name:
+            collision_info_str = f"与{self.collision_info.object_name}碰撞"
+        
+        # 增加碰撞位置打印，打印到控制台
+        if collision and not hasattr(self, '_collision_reported'):
+            collision_pos = None
+            if hasattr(self.collision_info, 'impact_point'):
+                collision_pos = self.collision_info.impact_point
+            
+            print(f"\n检测到碰撞! {collision_info_str}")
+            if collision_pos:
+                print(f"碰撞位置: {collision_pos.x_val:.2f}, {collision_pos.y_val:.2f}, {collision_pos.z_val:.2f}")
+                
+            # 设置标志避免重复报告同一次碰撞
+            self._collision_reported = True
+        
+        # 如果无碎计数器为0，则重置碰撞报告标志
+        if not collision and hasattr(self, '_collision_reported'):
+            delattr(self, '_collision_reported')
+            
+        # 计算碰撞惩罚
         reward_components['collision'] = -collision_penalty if collision else 0.0
         
         # Success reward

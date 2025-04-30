@@ -50,11 +50,25 @@ environment:
     collision_penalty: 10.0
     success_reward: 20.0
     step_penalty: 0.01
+    height_penalty: 5.0  # 高度惩罚权重，当高度超过初始高度200m时开始惩罚
 
   # 终止条件
   termination:
     max_steps: 2000
     success_distance_threshold: 1.0  # m
+  
+  # 目标点采样设置
+  target_sampling:
+    # XY平面范围（水平范围）
+    xy_min: -50.0  # 最小水平范围 (m)
+    xy_max: 50.0   # 最大水平范围 (m)
+    # Z轴范围（高度范围）。注意：AirSim中负值表示向上
+    z_min: -20.0   # 最小高度 (m)，负值表示向上
+    z_max: -50.0   # 最大高度 (m)，负值表示向上
+    # 与初始点的最小距离，避免目标点太近
+    min_distance: 20.0  # 最小距离 (m)
+    # 与初始点的最大距离，避免目标点太远
+    max_distance: 80.0  # 最大距离 (m)
 
 # 在顶层也提供奖励设置（增强配置健壮性）
 reward:
@@ -65,6 +79,7 @@ reward:
   collision_penalty: 10.0
   success_reward: 20.0
   step_penalty: 0.01
+  height_penalty: 5.0  # 高度惩罚权重，当高度超过初始高度200m时开始惩罚
 
 # 模型设置
 model:
