@@ -26,7 +26,7 @@ training:
   # 评估与保存
   eval_interval: 5000          # 每多少步评估一次
   eval_episodes: 5             # 每次评估的回合数
-  save_interval: 20000         # 每多少步保存模型
+  save_interval: 1000         # 每多少步保存模型
   save_best_only: false        # 是否只保存最佳模型
   max_checkpoints: 5           # 最多保存的检查点数量
   
@@ -109,7 +109,7 @@ environment:
 
 # 日志与监控
 monitoring:
-  log_interval: 1000         # 日志输出间隔
+  log_interval: 100         # 日志输出间隔
   tensorboard: true          # 是否使用TensorBoard
   plot_interval: 10000       # 绘图间隔
   video_interval: 50000      # 录制视频间隔

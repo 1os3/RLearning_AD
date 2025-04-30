@@ -1,8 +1,10 @@
 import numpy as np
 import torch
 import random
+import gc
 from typing import Dict, List, Tuple, Optional, Union, Any, NamedTuple
 from collections import deque
+from src.utils.tensor_utils import safe_stack, safe_process_batch
 
 class Transition(NamedTuple):
     """
@@ -403,9 +405,14 @@ class PrioritizedReplayBuffer:
         # Calculate weights
         weights = (len(self.tree) * sampling_probs) ** -beta
         
-        # Normalize weights to max weight
+        # 归一化权重
         weights = weights / weights.max()
-        weights = torch.FloatTensor(weights).to(self.device)
+        try:
+            weights = torch.FloatTensor(weights).to(self.device)
+        except Exception as e:
+            print(f"警告: 权重转换到设备时出错: {str(e)}，尝试备用方法")
+            # 尝试更安全的方法
+            weights = torch.tensor(weights, dtype=torch.float32, device='cpu').to(self.device)
         
         # 处理可能是字典类垏的状态数据
         if batch and isinstance(batch[0].state, dict):
@@ -426,26 +433,89 @@ class PrioritizedReplayBuffer:
             # 如果状态是张量，直接堆叠
             states = torch.stack([t.state for t in batch])
         
-        # 同样处理next_state
-        if batch and isinstance(batch[0].next_state, dict):
-            next_states = {}
-            for key in batch[0].next_state.keys():
-                if batch[0].next_state[key] is not None:
-                    try:
-                        next_states[key] = torch.stack([t.next_state[key] for t in batch if t.next_state[key] is not None])
-                    except:
-                        print(f"警告: 无法堆叠next_state的{key}组件，已跳过")
-                        next_states[key] = None
-                else:
-                    next_states[key] = None
-        else:
-            next_states = torch.stack([t.next_state for t in batch])
+        # 使用安全堆叠工具处理整个批次
+        try:
+            # 收集调试信息，快速排查问题
+            debug_mode = self.device.type in ['xpu', 'meta', 'hpu'] or len(self.buffer) > 1000
             
-        # 其他元素正常堆叠
-        actions = torch.stack([t.action for t in batch])
-        rewards = torch.stack([t.reward for t in batch])
-        dones = torch.stack([t.done for t in batch])
+            # 尝试直接使用安全处理函数
+            states, actions, rewards, next_states, dones = safe_process_batch(
+                batch, device=self.device, debug=debug_mode
+            )
+            
+            # 清理可能的内存碎片
+            if self.device.type == 'xpu' and hasattr(torch, 'xpu') and hasattr(torch.xpu, 'empty_cache'):
+                # 每100次采样执行一次缓存清理
+                if hasattr(self, '_sample_count'):
+                    self._sample_count += 1
+                    if self._sample_count % 100 == 0:
+                        torch.xpu.empty_cache()
+                else:
+                    self._sample_count = 1
+            
+        except Exception as e:
+            # 如果出错，记录错误并尝试更保守的方法
+            print(f"警告: 批次处理出错: {str(e)}。尝试备用方法...")
+            
+            try:
+                # 如果出错，尝试将全部数据移动到CPU上处理
+                cpu_batch = []
+                for t in batch:
+                    if isinstance(t.state, dict):
+                        cpu_state = {k: (v.cpu() if v is not None else None) for k, v in t.state.items()}
+                    else:
+                        cpu_state = t.state.cpu()
+                        
+                    if isinstance(t.next_state, dict):
+                        cpu_next_state = {k: (v.cpu() if v is not None else None) for k, v in t.next_state.items()}
+                    else:
+                        cpu_next_state = t.next_state.cpu()
+                        
+                    cpu_batch.append(Transition(
+                        state=cpu_state,
+                        action=t.action.cpu(),
+                        reward=t.reward.cpu(),
+                        next_state=cpu_next_state,
+                        done=t.done.cpu()
+                    ))
+                    
+                # 在CPU上处理后移回原设备
+                states, actions, rewards, next_states, dones = safe_process_batch(
+                    cpu_batch, device=torch.device('cpu'), debug=True
+                )
+                # 移回原设备
+                if self.device.type != 'cpu':
+                    if isinstance(states, dict):
+                        states = {k: (v.to(self.device) if v is not None else None) for k, v in states.items()}
+                    else:
+                        states = states.to(self.device)
+                        
+                    if isinstance(next_states, dict):
+                        next_states = {k: (v.to(self.device) if v is not None else None) for k, v in next_states.items()}
+                    else:
+                        next_states = next_states.to(self.device)
+                        
+                    actions = actions.to(self.device)
+                    rewards = rewards.to(self.device)
+                    dones = dones.to(self.device)
+                
+                # 清理临时变量
+                del cpu_batch
+                gc.collect()
+                
+            except Exception as final_e:
+                print(f"错误: 所有堆叠方法都失败了！{str(final_e)}")
+                # 紧急情况下返回空批次
+                if self.device.type == 'cpu':
+                    empty_tensor = torch.zeros(1, device='cpu')
+                else:
+                    empty_tensor = torch.zeros(1, device=self.device)
+                    
+                # 创建空引用返回值
+                empty_dict = {}
+                return (empty_dict, empty_tensor, empty_tensor, empty_dict, empty_tensor), weights, indices
         
+        # 正常返回结果
         return (states, actions, rewards, next_states, dones), weights, indices
     
     def update_priorities(self, indices: List[int], priorities: np.ndarray) -> None:
