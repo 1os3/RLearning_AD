@@ -147,7 +147,9 @@ class ContrastivePredictiveCoding(nn.Module):
         logits = torch.sum(all_preds * all_targets, dim=2) / self.temperature  # Shape: (batch_size, batch_size)
         
         # Create labels (diagonal elements are positives, all others are negatives)
-        labels = torch.arange(batch_size, device=state.device)
+        # 从Tensor中获取设备，而不是从字典中获取
+        device = z_t.device  # 从Encoder输出中获取设备
+        labels = torch.arange(batch_size, device=device)
         
         # InfoNCE loss
         loss = F.cross_entropy(logits, labels)
@@ -184,18 +186,21 @@ class FrameReconstruction(nn.Module):
         
         # Get parameters from config
         if isinstance(config, dict):
-            self.state_dim = config.get('state_dim', 512)  # Latent state dimension
+            # 使用实际的状态维度而不是预定义的512
+            self.state_dim = config.get('state_dim', 15)  # 实际特征维度是9维状态+6维目标=15维
             self.action_dim = config.get('action_dim', 4)  # Action dimension
-            self.hidden_dims = config.get('hidden_dims', [256, 256])
-            self.output_dim = config.get('output_dim', 512)  # Output dimension (reconstructed next state)
+            self.hidden_dims = config.get('hidden_dims', [64, 128, 256])
+            self.output_dim = config.get('output_dim', 15)  # 输出维度也应与状态维度一致
             self.use_l2_loss = config.get('use_l2_loss', True)  # Use L2 or L1 loss
         else:
             # Default values if config is not provided or is not a dictionary
-            self.state_dim = 512
+            self.state_dim = 15  # 实际特征维度是9维状态+6维目标=15维
             self.action_dim = 4
-            self.hidden_dims = [256, 256]
-            self.output_dim = 512
+            self.hidden_dims = [64, 128, 256]
+            self.output_dim = 15
             self.use_l2_loss = True
+            
+        print(f"FrameReconstruction辅助任务输入维度: {self.state_dim + self.action_dim}, 输出维度: {self.output_dim}")
         
         # Build network layers
         layers = []
@@ -211,20 +216,42 @@ class FrameReconstruction(nn.Module):
         
         self.network = nn.Sequential(*layers)
     
-    def forward(self, state: torch.Tensor, action: torch.Tensor, next_state: torch.Tensor) -> torch.Tensor:
+    def forward(self, state, action: torch.Tensor, next_state) -> torch.Tensor:
         """
         Forward pass of Frame Reconstruction.
         
         Args:
-            state: Current state tensor (batch_size, state_dim)
+            state: Current state tensor or dictionary (batch_size, state_dim)
             action: Action tensor (batch_size, action_dim)
-            next_state: Next state tensor (batch_size, state_dim)
+            next_state: Next state tensor or dictionary (batch_size, state_dim)
             
         Returns:
             Reconstruction loss
         """
-        # Concatenate state and action
-        x = torch.cat([state, action], dim=1)
+        # 处理字典类型的状态输入
+        if isinstance(state, dict):
+            if 'state' in state and 'target' in state:
+                state_features = torch.cat([state['state'], state['target']], dim=-1)
+            elif 'state' in state:
+                state_features = state['state']
+            else:
+                raise ValueError("FrameReconstruction需要'state'组件")
+        else:
+            state_features = state
+            
+        # 处理字典类型的next_state输入
+        if isinstance(next_state, dict):
+            if 'state' in next_state and 'target' in next_state:
+                next_state_features = torch.cat([next_state['state'], next_state['target']], dim=-1)
+            elif 'state' in next_state:
+                next_state_features = next_state['state']
+            else:
+                raise ValueError("FrameReconstruction需要'state'组件")
+        else:
+            next_state_features = next_state
+        
+        # Concatenate state features and action
+        x = torch.cat([state_features, action], dim=1)
         
         # Forward pass through reconstruction network
         predicted_next_state = self.network(x)
@@ -232,10 +259,10 @@ class FrameReconstruction(nn.Module):
         # Compute reconstruction loss
         if self.use_l2_loss:
             # MSE loss
-            loss = F.mse_loss(predicted_next_state, next_state)
+            loss = F.mse_loss(predicted_next_state, next_state_features)
         else:
             # L1 loss (more robust to outliers)
-            loss = F.l1_loss(predicted_next_state, next_state)
+            loss = F.l1_loss(predicted_next_state, next_state_features)
         
         return loss
 
@@ -269,18 +296,21 @@ class PoseRegression(nn.Module):
         
         # Get parameters from config
         if isinstance(config, dict):
-            self.state_dim = config.get('state_dim', 512)  # State dimension
+            # 使用实际的状态维度而不是预定义的512
+            self.state_dim = config.get('state_dim', 15)  # 实际特征维度是9维状态+6维目标=15维
             self.action_dim = config.get('action_dim', 4)  # Action dimension
             self.pose_dim = config.get('pose_dim', 9)  # Pose dimension (position, orientation, velocity)
-            self.hidden_dims = config.get('hidden_dims', [256, 128])
+            self.hidden_dims = config.get('hidden_dims', [64, 128, 256])
             self.normalize_targets = config.get('normalize_targets', True)  # Normalize regression targets
         else:
             # Default values if config is not provided or is not a dictionary
-            self.state_dim = 512
+            self.state_dim = 15  # 实际特征维度是9维状态+6维目标=15维
             self.action_dim = 4
             self.pose_dim = 9
-            self.hidden_dims = [256, 128]
+            self.hidden_dims = [64, 128, 256]
             self.normalize_targets = True
+            
+        print(f"PoseRegression辅助任务输入维度: {self.state_dim + self.action_dim}, 输出维度: {self.pose_dim}")
         
         # Running statistics for target normalization
         self.register_buffer('running_mean', torch.zeros(self.pose_dim))
@@ -382,20 +412,42 @@ class PoseRegression(nn.Module):
             # If the state doesn't contain enough dimensions, return zeros
             return torch.zeros(state.shape[0], self.pose_dim, device=state.device)
     
-    def forward(self, state: torch.Tensor, action: torch.Tensor, next_state: torch.Tensor) -> torch.Tensor:
+    def forward(self, state, action: torch.Tensor, next_state) -> torch.Tensor:
         """
         Forward pass of Pose Regression.
         
         Args:
-            state: Current state tensor (batch_size, state_dim)
+            state: Current state tensor or dictionary (batch_size, state_dim)
             action: Action tensor (batch_size, action_dim)
-            next_state: Next state tensor (batch_size, state_dim)
+            next_state: Next state tensor or dictionary (batch_size, state_dim)
             
         Returns:
             Pose regression loss
         """
-        # Extract target pose from next state
-        target_pose = self.extract_pose_from_state(next_state)
+        # 处理字典类型的状态输入
+        if isinstance(state, dict):
+            if 'state' in state and 'target' in state:
+                state_features = torch.cat([state['state'], state['target']], dim=-1)
+            elif 'state' in state:
+                state_features = state['state']
+            else:
+                raise ValueError("PoseRegression需要'state'组件")
+        else:
+            state_features = state
+            
+        # 处理字典类型的next_state输入
+        if isinstance(next_state, dict):
+            if 'state' in next_state and 'target' in next_state:
+                next_state_features = torch.cat([next_state['state'], next_state['target']], dim=-1)
+            elif 'state' in next_state:
+                next_state_features = next_state['state']
+            else:
+                raise ValueError("PoseRegression需要'state'组件")
+        else:
+            next_state_features = next_state
+            
+        # Extract target pose from next state features
+        target_pose = self.extract_pose_from_state(next_state_features)
         
         # Update normalization statistics
         if self.training and self.normalize_targets:
@@ -404,8 +456,8 @@ class PoseRegression(nn.Module):
         # Normalize target pose
         normalized_target_pose = self.normalize_pose(target_pose)
         
-        # Concatenate state and action
-        x = torch.cat([state, action], dim=1)
+        # Concatenate state features and action
+        x = torch.cat([state_features, action], dim=1)
         
         # Forward pass through network to predict next pose
         predicted_normalized_pose = self.network(x)
