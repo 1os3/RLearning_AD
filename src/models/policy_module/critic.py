@@ -224,31 +224,46 @@ class SharedTrunkCritic(nn.Module):
         self.trunk = trunk_network
         self.critics = TwinCritic(critic_config)
     
-    def forward(self, state: torch.Tensor, action: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, state, action: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass through both critic networks with shared trunk.
         
         Args:
-            state: Raw state input tensor
+            state: Raw state input tensor or dictionary of tensors
             action: Action tensor
             
         Returns:
             Tuple of (q1_values, q2_values), each of shape (batch_size, 1)
         """
-        # Extract features using shared trunk
-        state_features = self.trunk(state)
+        # 处理字典类型的输入
+        if isinstance(state, dict):
+            # 拼接state和target特征，与Actor处理方式一致
+            if 'state' in state and 'target' in state:
+                # 将状态和目标向量连接
+                features = torch.cat([state['state'], state['target']], dim=-1)
+            elif 'state' in state:
+                # 仅使用状态向量
+                features = state['state']
+            else:
+                raise ValueError("Critic需要'state'组件，但输入字典中不存在此键")
+            
+            # 使用处理后的特征进行前向传播
+            state_features = self.trunk(features)
+        else:
+            # 标准Tensor输入，直接使用
+            state_features = self.trunk(state)
         
         # Forward through both critic networks
         q1, q2 = self.critics(state_features, action)
         
         return q1, q2
     
-    def min_q(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+    def min_q(self, state, action: torch.Tensor) -> torch.Tensor:
         """
         Get minimum Q-value from both critics to reduce overestimation.
         
         Args:
-            state: Raw state input tensor
+            state: Raw state input tensor or dictionary of tensors
             action: Action tensor
             
         Returns:

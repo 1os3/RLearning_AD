@@ -89,20 +89,36 @@ class Actor(nn.Module):
         self.mean = nn.Linear(self.hidden_dims[-1], self.action_dim)
         self.log_std = nn.Linear(self.hidden_dims[-1], self.action_dim)
     
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Forward pass of Actor network.
+        Forward pass through Actor network.
         
         Args:
-            x: Input tensor of shape (batch_size, trunk_dim) from the shared trunk
+            x: Input tensor of state features (batch_size, fusion_dim) or dict of tensors
             
         Returns:
             Tuple of:
                 - Mean action of shape (batch_size, action_dim)
                 - Log standard deviation of shape (batch_size, action_dim)
         """
+        # 处理字典类型的输入
+        if isinstance(x, dict):
+            # 处理字典类型的输入
+            if 'state' in x and 'target' in x:
+                # 将状态和目标向量连接
+                features = torch.cat([x['state'], x['target']], dim=-1)
+            elif 'state' in x:
+                # 仅使用状态向量
+                features = x['state']
+            else:
+                raise ValueError("Actor需要'state'组件来生成动作")
+            trunk_input = features
+        else:
+            # 标准Tensor输入，直接使用
+            trunk_input = x
+            
         # Process through shared trunk
-        x = self.trunk(x)
+        x = self.trunk(trunk_input)
         
         # Compute mean and log_std
         mean = self.mean(x)
@@ -127,24 +143,10 @@ class Actor(nn.Module):
                 - Mean action of shape (batch_size, action_dim)
                 - Log probability of the sampled action
         """
-        # 处理字典类垏的输入
-        if isinstance(x, dict):
-            # 我们需要根据具体模型确定如何和哪些组件通信交互
-            # 这里假设我们只需要state和target信息
-            if 'state' in x and 'target' in x:
-                # 将状态和目标向量连接
-                features = torch.cat([x['state'], x['target']], dim=-1)
-            elif 'state' in x:
-                # 仅使用状态向量
-                features = x['state']
-            else:
-                raise ValueError("Actor需要'state'组件来生成动作")
-        else:
-            # 假设输入已经是适当处理过的特征向量
-            features = x
-            
-        # Get policy parameters
-        mean, log_std = self.forward(features)
+        # 直接调用forward方法处理输入(包括字典类型)
+        # forward方法会处理字典类型输入并调用trunk网络
+        # 这样我们只需要在一个地方维护字典处理逻辑
+        mean, log_std = self.forward(x)
         std = torch.exp(log_std)
         
         # Create normal distribution
