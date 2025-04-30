@@ -80,13 +80,13 @@ model:
     # 姿态编码器
     pose_encoder:
       input_dim: 12  # 速度(3), 加速度(3), 角度(3), 角速度(3)
-      hidden_dims: [64, 128]
+      hidden_dims: [128, 256, 512]  # 增加中间层维度和层数
       output_dim: 256
     
     # 目标编码器
     target_encoder:
       input_dim: 3  # 距离(1), 相对方向(2)
-      hidden_dims: [32]
+      hidden_dims: [64, 128]  # 增加中间层维度和层数
       output_dim: 128
   
   # 多模态融合模块
@@ -94,37 +94,37 @@ model:
     # 3D-Depthwise卷积
     depthwise_conv:
       spatial_kernel_size: 3
-      temporal_kernel_size: 3
-      channels: 512
+      temporal_kernel_size: 5  # 增加时间维度的卷积核大小
+      channels: 768  # 增加通道数
     
     # Cross-modal Transformer
     cross_attention:
-      num_heads: 8
-      hidden_dim: 512
+      num_heads: 12  # 增加注意力头数
+      hidden_dim: 768  # 增加隐含维度
       dropout: 0.1
-      num_layers: 4
+      num_layers: 6  # 增加层数
     
     # 记忆库
     memory_bank:
-      memory_size: 16  # 记忆库大小 (时间步)
-      key_dim: 512
-      value_dim: 512
+      memory_size: 32  # 增加记忆库大小
+      key_dim: 768  # 增加Key维度
+      value_dim: 768  # 增加Value维度
       use_attention_retrieval: true
   
   # 策略模块
   policy_module:
-    trunk_dim: 512  # 共享trunk的输出维度
+    trunk_dim: 768  # 增大共享trunk的输出维度
     
     # Actor网络
     actor:
-      hidden_dims: [256, 128]
+      hidden_dims: [512, 384, 256]  # 增加层数和维度
       activation: relu
       log_std_min: -10
       log_std_max: 2
     
     # Critic网络
     critic:
-      hidden_dims: [256, 128]
+      hidden_dims: [512, 384, 256]  # 增加层数和维度
       activation: relu
       num_critics: 2  # 双Q网络降低过估计
 
@@ -158,6 +158,27 @@ algorithm:
     contrastive_weight: 0.1
     reconstruction_weight: 0.1
     pose_prediction_weight: 0.1
+    
+    # 对比预测编码 (CPC)
+    contrastive:
+      state_dim: 15  # 状态维度
+      hidden_dim: 384  # 增大隐藏层维度
+      output_dim: 512  # 增大输出层维度
+      num_negatives: 32  # 增加负样本数量
+    
+    # 帧重建
+    reconstruction:
+      state_dim: 15  # 状态维度
+      action_dim: 4
+      hidden_dims: [128, 256, 384]  # 增加层数和维度
+      output_dim: 15
+    
+    # 姿态回归
+    pose_regression:
+      state_dim: 15  # 状态维度
+      action_dim: 4
+      hidden_dims: [128, 256, 384]  # 增加层数和维度
+      pose_dim: 9
   
   # 泛化增强
   regularization:
@@ -167,7 +188,7 @@ algorithm:
 
 # 训练设置
 training:
-  batch_size: 64
+  batch_size: 128
   num_steps: 1000000
   update_after: 1000
   update_every: 50

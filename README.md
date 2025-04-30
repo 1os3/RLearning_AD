@@ -104,6 +104,93 @@ python check_xpu.py
 └── requirements.txt        # 项目依赖
 ```
 
+## 模型详细架构
+
+### 输入模块 (Input Module)
+
+#### 帧处理器 (FrameProcessor)
+- **骨干网络**: EfficientNet-B0 / ResNet18 / MobileNetV2 (可配置)
+- **动态Patch提取**:
+  - 复杂度估计网络: Conv2d(3→32) → ReLU → AdaptiveAvgPool2d → Conv2d(32→1) → Sigmoid
+  - Patch大小范围: 8-32像素 (自适应)
+- **因式化3D深度可分离卷积**:
+  - 空间卷积: DepthwiseConv2d(C→C, 3×3) → Conv2d(C→C', 1×1)
+  - 时间卷积: Conv1d(C'→C', 5) → 增大卷积核提升时序建模能力
+  - 输出维度: 768 → 增大特征维度
+- **轻量化注意力**:
+  - 12头注意力 → 增强特征表示能力
+  - Linformer/Performer低秩近似
+  - 输入/输出维度: 768 → 增大表征容量
+
+#### 姿态编码器 (PoseEncoder)
+- 输入: 9维状态向量 (位置、旋转、速度)
+- 网络结构: Linear(9→128) → LayerNorm → ReLU → Linear(128→256) → ReLU → Linear(256→512) → LayerNorm
+- 输出维度: 512
+
+#### 目标编码器 (TargetEncoder)
+- 输入: 6维目标向量 (相对距离、相对方向)
+- 网络结构: Linear(6→64) → LayerNorm → ReLU → Linear(64→128) → ReLU → Linear(128→512) → LayerNorm
+- 输出维度: 512
+
+### 多模态融合模块 (Fusion Module)
+
+#### Cross-Modal Transformer
+- 注意力头数: 12 → 增加注意力等式表示丰富度
+- 隐藏维度: 64 (每头)
+- 层数: 6 → 增加层数提升建模能力
+- 前馈网络: Linear(768→2048) → ReLU → Linear(2048→768)
+- 注意力机制: 图像tokens作为Key/Value，姿态/目标tokens作为Query
+
+#### 历史记忆库 (MemoryBank)
+- **Key-Value存储**:
+  - 默认记忆大小: 32时间步
+  - Key维度: 768 → 增强记忆编码能力
+  - Value维度: 768 → 增强记忆储存容量
+- **动态历史记忆**:
+  - 稳定性估计器: Linear(1536→64) → ReLU → Linear(64→1) → Sigmoid
+  - 记忆大小调整: 8-64时间步 (根据场景稳定性)
+- **优先级注意力**:
+  - 优先级估计器: Linear(1536→64) → ReLU → Linear(64→1) → Softplus
+
+### 策略模块 (Policy Module)
+
+#### 共享主干网络 (SharedTrunk)
+- 输入维度: 15 (9维状态+6维目标)
+- 层数: 3
+- 隐藏层: Linear(15→512) → ReLU → Linear(512→512) → ReLU → Linear(512→768) → ReLU
+- 输出维度: 768 → 增强特征表达能力
+
+#### Actor网络
+- 输入维度: 768 (主干网络输出)
+- 均值网络: Linear(768→512) → ReLU → Linear(512→384) → ReLU → Linear(384→4)
+- 标准差网络: Linear(768→512) → ReLU → Linear(512→384) → ReLU → Linear(384→4)
+- 输出: 4维连续动作 (均值和对数标准差)
+
+#### Critic网络
+- 输入维度: 768 (主干网络输出) + 4 (动作维度) = 772
+- Q1网络: Linear(772→512) → ReLU → Linear(512→384) → ReLU → Linear(384→256) → ReLU → Linear(256→1)
+- Q2网络: Linear(772→512) → ReLU → Linear(512→384) → ReLU → Linear(384→256) → ReLU → Linear(256→1)
+- 输出: 两个Q值估计
+
+### 辅助任务模块
+
+#### 对比预测编码 (CPC)
+- 编码器: Linear(15→128) → ReLU → Linear(128→384) → ReLU → Linear(384→512)
+- 预测头: Linear(512→512) → ReLU → Linear(512→512)
+- 样本数: 32对比样本 → 增加对比学习样本数
+
+#### 帧重建 (FrameReconstruction)
+- 输入维度: 15 (状态) + 4 (动作) = 19
+- 隐藏层: Linear(19→128) → ReLU → Linear(128→256) → ReLU → Linear(256→384) → ReLU
+- 输出层: Linear(384→15)
+- 输出维度: 15 (预测下一状态)
+
+#### 姿态回归 (PoseRegression)
+- 输入维度: 15 (状态) + 4 (动作) = 19
+- 隐藏层: Linear(19→128) → ReLU → Linear(128→256) → ReLU → Linear(256→384) → ReLU
+- 输出层: Linear(384→9)
+- 输出维度: 9 (预测姿态子集)
+
 ## 使用方法
 
 ### 训练模型
