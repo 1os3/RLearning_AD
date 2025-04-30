@@ -51,9 +51,12 @@ class ContrastivePredictiveCoding(nn.Module):
             self.use_gru = True
         
         # Define encoder network (converts state to latent representation)
-        # We'll use a simple MLP for this
+        # 使用实际状态向量维度而不是预定义的embedding_dim
+        self.state_dim = 15  # 实际特征维度是9维状态+6维目标=15维
+        print(f"CPC辅助任务使用输入维度: {self.state_dim}, 输出维度: {self.output_dim}")
+        
         self.encoder = nn.Sequential(
-            nn.Linear(self.embedding_dim, self.hidden_dim),
+            nn.Linear(self.state_dim, self.hidden_dim),
             nn.ReLU(inplace=True),
             nn.Linear(self.hidden_dim, self.output_dim)
         )
@@ -79,23 +82,46 @@ class ContrastivePredictiveCoding(nn.Module):
             nn.Linear(self.hidden_dim, self.output_dim)
         )
     
-    def forward(self, state: torch.Tensor, action: torch.Tensor, next_state: torch.Tensor) -> torch.Tensor:
+    def forward(self, state, action: torch.Tensor, next_state) -> torch.Tensor:
         """
         Forward pass of Contrastive Predictive Coding.
         
         Args:
-            state: Current state tensor of shape (batch_size, state_dim)
+            state: Current state tensor or dictionary of shape (batch_size, state_dim)
             action: Action tensor of shape (batch_size, action_dim)
-            next_state: Next state tensor of shape (batch_size, state_dim)
+            next_state: Next state tensor or dictionary of shape (batch_size, state_dim)
             
         Returns:
             CPC loss
         """
-        batch_size = state.shape[0]
+        # 处理字典类型输入
+        if isinstance(state, dict):
+            # 与模型保持一致的特征提取逻辑
+            if 'state' in state and 'target' in state:
+                state_features = torch.cat([state['state'], state['target']], dim=-1)
+            elif 'state' in state:
+                state_features = state['state']
+            else:
+                raise ValueError("CPC辅助任务需要'state'组件")
+        else:
+            state_features = state
+            
+        # 处理next_state字典
+        if isinstance(next_state, dict):
+            if 'state' in next_state and 'target' in next_state:
+                next_state_features = torch.cat([next_state['state'], next_state['target']], dim=-1)
+            elif 'state' in next_state:
+                next_state_features = next_state['state']
+            else:
+                raise ValueError("CPC辅助任务需要'state'组件")
+        else:
+            next_state_features = next_state
+            
+        batch_size = state_features.shape[0]
         
         # Encode current and next state
-        z_t = self.encoder(state)  # Current state embedding
-        z_tp1 = self.encoder(next_state)  # Next state embedding (target)
+        z_t = self.encoder(state_features)  # Current state embedding
+        z_tp1 = self.encoder(next_state_features)  # Next state embedding (target)
         
         # Get context representation
         if self.use_gru:

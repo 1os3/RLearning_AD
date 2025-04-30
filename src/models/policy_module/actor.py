@@ -196,32 +196,48 @@ class SharedTrunkActor(nn.Module):
         self.trunk = trunk_network
         self.actor = Actor(actor_config)
     
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass of Actor network with shared trunk.
         
         Args:
-            x: Input tensor to the trunk network
+            x: Input tensor or dictionary to the trunk network
             
         Returns:
             Tuple of:
                 - Mean action of shape (batch_size, action_dim)
                 - Log standard deviation of shape (batch_size, action_dim)
         """
+        # 处理字典类型的输入
+        if isinstance(x, dict):
+            # 处理字典类型的输入
+            if 'state' in x and 'target' in x:
+                # 将状态和目标向量连接
+                features = torch.cat([x['state'], x['target']], dim=-1)
+            elif 'state' in x:
+                # 仅使用状态向量
+                features = x['state']
+            else:
+                raise ValueError("Actor需要'state'组件来生成动作")
+            trunk_input = features
+        else:
+            # 标准Tensor输入，直接使用
+            trunk_input = x
+            
         # Pass through shared trunk
-        trunk_features = self.trunk(x)
+        trunk_features = self.trunk(trunk_input)
         
         # Pass through actor head
         mean, log_std = self.actor(trunk_features)
         
         return mean, log_std
     
-    def sample(self, x: torch.Tensor, deterministic: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def sample(self, x, deterministic: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Sample actions from the policy with shared trunk.
         
         Args:
-            x: Input tensor to the trunk network
+            x: Input tensor or dictionary to the trunk network
             deterministic: If True, return the mean action instead of sampling
             
         Returns:
@@ -230,8 +246,24 @@ class SharedTrunkActor(nn.Module):
                 - Mean action of shape (batch_size, action_dim)
                 - Log probability of the sampled action
         """
+        # 处理字典类型的输入
+        if isinstance(x, dict):
+            # 处理字典类型的输入
+            if 'state' in x and 'target' in x:
+                # 将状态和目标向量连接
+                features = torch.cat([x['state'], x['target']], dim=-1)
+            elif 'state' in x:
+                # 仅使用状态向量
+                features = x['state']
+            else:
+                raise ValueError("Actor需要'state'组件来生成动作")
+            trunk_input = features
+        else:
+            # 标准Tensor输入，直接使用
+            trunk_input = x
+            
         # Pass through shared trunk
-        trunk_features = self.trunk(x)
+        trunk_features = self.trunk(trunk_input)
         
         # Sample from actor head
         action, mean, log_prob = self.actor.sample(trunk_features, deterministic)
