@@ -106,7 +106,7 @@ model:
     
     # 记忆库
     memory_bank:
-      memory_size: 32  # 记忆库大小 (时间步)
+      memory_size: 16  # 记忆库大小 (时间步)
       key_dim: 512
       value_dim: 512
       use_attention_retrieval: true
@@ -167,7 +167,7 @@ algorithm:
 
 # 训练设置
 training:
-  batch_size: 128
+  batch_size: 64
   num_steps: 1000000
   update_after: 1000
   update_every: 50

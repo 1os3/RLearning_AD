@@ -5,6 +5,7 @@ import yaml
 import numpy as np
 import torch
 import random
+import gc
 from pathlib import Path
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from src.algorithms.sac import SAC
 from src.utils.logger import Logger
 from src.utils.evaluator import Evaluator
 from src.utils.resource_monitor import ResourceMonitor
+from src.utils.memory_manager import MemoryManager
 
 def set_seed(seed=None):
     """Set all random seeds for reproducibility.
@@ -255,6 +257,18 @@ def main():
     # resource_monitor = ResourceMonitor(logger=logger, interval=5)
     # resource_monitor.start()
     
+    # 初始化内存管理器
+    memory_check_interval = config.get('memory_management', {}).get('check_interval', 1000)
+    memory_threshold = config.get('memory_management', {}).get('emergency_threshold', 0.85)
+    memory_manager = MemoryManager(
+        device=device,
+        check_interval=memory_check_interval,
+        emergency_threshold=memory_threshold,
+        clear_cuda_cache=True,
+        debug_mode=config.get('debug', False)
+    )
+    print(f"内存管理器已初始化: 检查间隔={memory_check_interval}步, 阈值={memory_threshold*100:.1f}%")
+    
     # Create environment
     env = AirSimUAVEnvironment(config['environment'])
     eval_env = AirSimUAVEnvironment(config['environment'], evaluation=True)
@@ -383,6 +397,16 @@ def main():
                     logger.log_scalar(f"train/{key}", value, step)
                     metric_strs.append(f"{key}: {value:.4f}")
                 print(f"Loss: {' | '.join(metric_strs)} | 模型正在学习...")
+                
+                # 定期执行内存管理
+                cleaned, mem_stats = memory_manager.check_and_collect(step, logger)
+                if cleaned:
+                    # 记录内存清理信息
+                    logger.log_scalar("memory/cleanup_triggered", 1.0, step)
+                    if mem_stats.get('system_ram_percent', 0) > 0:
+                        print(f"⚠️ 内存清理: 系统内存使用率 {mem_stats.get('system_ram_percent', 0)*100:.1f}%, " +
+                              f"{'CUDA' if mem_stats.get('gpu_used', 0) > 0 else 'XPU' if mem_stats.get('xpu_used', 0) > 0 else ''}" +
+                              f"显存使用 {mem_stats.get('gpu_used', mem_stats.get('xpu_used', 0)):.2f}GB")
         
         # Handle episode termination
         if done:
@@ -413,36 +437,88 @@ def main():
         
         # Save checkpoint
         if (step + 1) % save_freq == 0:
-            agent.save(save_dir)
-            print(f"Saved checkpoint at step {step + 1}")
+            # 在保存模型前执行内存回收，避免不必要的临时对象占用空间
+            memory_manager.check_and_collect(step, logger, force=True)
+            
+            try:
+                agent.save(save_dir)
+                print(f"Saved checkpoint at step {step + 1}")
+            except Exception as e:
+                print(f"⚠️ 保存模型时出错: {e}")
+                # 出现错误时紧急清理内存
+                memory_manager.emergency_cleanup(logger, step)
         
         # Run evaluation
         if (step + 1) % eval_freq == 0:
-            print(f"Running evaluation at step {step + 1}...")
-            eval_results = evaluator.evaluate(agent)
+            # 在评估前执行内存回收，确保有足够空间执行评估
+            memory_manager.check_and_collect(step, logger, force=True)
             
-            # Log evaluation results
-            for key, value in eval_results.items():
-                logger.log_scalar(f"eval/{key}", value, step)
+            try:
+                print(f"Running evaluation at step {step + 1}...")
+                eval_results = evaluator.evaluate(agent)
+                
+                # Log evaluation results
+                for key, value in eval_results.items():
+                    logger.log_scalar(f"eval/{key}", value, step)
+            except Exception as e:
+                print(f"⚠️ 评估过程中出错: {e}")
+                # 出现错误时紧急清理内存
+                memory_manager.emergency_cleanup(logger, step)
             
             print(f"Evaluation at step {step + 1}: Mean Reward: {eval_results['mean_reward']:.2f}")
     
     # 资源监控已禁用
     # resource_monitor.stop()
     
+    # 训练结束前进行一次全面内存清理
+    print("训练完成，执行最终内存清理...")
+    memory_manager.emergency_cleanup(logger, step)
+    
+    # 记录最终内存使用情况
+    final_mem_stats = memory_manager.get_memory_stats()
+    logger.log_scalar("memory/final_system_ram", final_mem_stats.get('system_ram_percent', 0), step)
+    if memory_manager.use_cuda:
+        logger.log_scalar("memory/final_gpu_used_gb", final_mem_stats.get('gpu_used', 0), step)
+    elif memory_manager.use_xpu:
+        logger.log_scalar("memory/final_xpu_used_gb", final_mem_stats.get('xpu_used', 0), step)
+    
     # Final save and evaluation
-    agent.save(save_dir)
-    eval_results = evaluator.evaluate(agent)
-    
-    # Print final summary
-    print("Training completed!")
-    print(f"Final evaluation: Mean Reward: {eval_results['mean_reward']:.2f}")
-    print(f"Model saved to {save_dir}")
-    print(f"Logs saved to {log_dir}")
-    
-    # Close environments
-    env.close()
-    eval_env.close()
+    try:
+        print("保存最终模型...")
+        agent.save(save_dir)
+        
+        print("执行最终评估...")
+        eval_results = evaluator.evaluate(agent)
+        
+        # Print final summary
+        print("========== 训练完成 ==========")
+        print(f"最终评估结果: 平均奖励 {eval_results['mean_reward']:.2f}")
+        print(f"模型已保存至: {save_dir}")
+        print(f"日志已保存至: {log_dir}")
+        
+        # 记录训练总结
+        logger.log_scalar("final/mean_reward", eval_results['mean_reward'], step)
+        logger.log_scalar("final/episode_count", episode_count, step)
+        logger.log_scalar("final/training_steps", step, step)
+        logger.log_text("final/training_summary", f"训练完成，共执行{step}步，{episode_count}回合，最终平均奖励{eval_results['mean_reward']:.2f}")
+    except Exception as e:
+        print(f"⚠️ 最终保存或评估过程中出错: {e}")
+    finally:
+        # 确保资源释放
+        print("释放环境资源...")
+        try:
+            env.close()
+        except Exception as e:
+            print(f"关闭训练环境出错: {e}")
+            
+        try:
+            eval_env.close() 
+        except Exception as e:
+            print(f"关闭评估环境出错: {e}")
+            
+        # 最终确保所有GPU/内存资源释放
+        memory_manager.collect_garbage(force=True)
+        print("内存资源已释放")
 
 if __name__ == "__main__":
     main()
