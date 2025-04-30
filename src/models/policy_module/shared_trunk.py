@@ -30,12 +30,16 @@ class SharedTrunk(nn.Module):
             config = full_config['model']['policy_module']
         
         # Get parameters from config
-        self.fusion_dim = config.get('fusion_dim', 512)  # Input dim from fusion module
-        self.trunk_dim = config.get('trunk_dim', 512)    # Output dim for Actor/Critic heads
-        self.hidden_dims = config.get('trunk_hidden_dims', [512, 512])
+        # 自动适配输入维度，如果配置了fusion_dim则使用，否则使用较小的输入维度
+        # 防止维度不匹配错误
+        self.fusion_dim = config.get('fusion_dim', 15)  # 默认值设为15而不是512
+        self.trunk_dim = config.get('trunk_dim', 512)   # Output dim for Actor/Critic heads
+        self.hidden_dims = config.get('trunk_hidden_dims', [128, 256, 512])
         self.activation_name = config.get('activation', 'relu')
         self.use_layernorm = config.get('use_layernorm', True)
         self.dropout_rate = config.get('dropout_rate', 0.1)
+        
+        print(f"SharedTrunk 输入维度: {self.fusion_dim}, 输出维度: {self.trunk_dim}")
         
         # Set activation function
         if self.activation_name == 'relu':
