@@ -318,6 +318,21 @@ class AirSimDroneEnv(gym.Env):
     
     def reset(self, seed=None, options=None) -> Tuple[Dict[str, Any], Dict]:
         """
+        重置环境状态。
+        
+        注意: 这里会清除初始高度记录，确保每次reset都会重新计算初始高度！
+        """
+        # 清除高度记录，确保每次重置都重新计算初始高度
+        if hasattr(self, '_initial_height'):
+            delattr(self, '_initial_height')
+        
+        # 清除碰撞记录
+        if hasattr(self, '_collision_reported'):
+            delattr(self, '_collision_reported')
+            
+        if hasattr(self, 'last_collision_position'):
+            delattr(self, 'last_collision_position')
+        """
         Reset environment state.
         
         Args:
@@ -831,6 +846,9 @@ class AirSimDroneEnv(gym.Env):
         # 这样，当飞行器上升时，高度差为正号，下降时为负号
         height_diff = self._initial_height - current_position[2]  # 正值表示当前高度高于初始高度
         
+        # 更直观的表达：在NED系统中，飞得越高，Z越负
+        # height_diff > 0 意味着飞得比初始高度更高
+        
         # 计算与目标高度的差值
         target_height_diff = 0.0
         if isinstance(self.target_position, np.ndarray):
@@ -838,10 +856,11 @@ class AirSimDroneEnv(gym.Env):
         else:
             target_height_diff = self.target_position[2] - current_position[2]  # 正值表示远离目标
         
-        # 打印当前高度信息（每100步打印一次）
-        if self.step_count % 100 == 0:
-            print(f"\n当前高度: {current_position[2]:.2f}, 初始高度: {self._initial_height:.2f}, "
-                  f"高度差值: {height_diff:.2f}, 目标高度差值: {target_height_diff:.2f}")
+        # 打印当前高度信息（每50步打印一次）
+        if self.step_count % 50 == 0:
+            print(f"\
+当前高度: {current_position[2]:.2f}m, 初始高度: {self._initial_height:.2f}m, "
+                  f"差值: {height_diff:.2f}m [>阿阿阿阿阿阿阿50=惩罚]")
         
         # 高度惩罚逻辑：
         # 1. 如果无人机与初始高度差大于50m，给予惩罚
@@ -857,8 +876,7 @@ class AirSimDroneEnv(gym.Env):
             height_penalty_value -= high_altitude_penalty
             
             # 打印高空惩罚详情
-            if high_altitude_penalty > 0.01:
-                print(f"  高空惩罚: {high_altitude_penalty:.4f}, 超高: {excess_height:.2f}m")
+            print(f"  [高空惩罚] -{high_altitude_penalty:.4f}, 超过高度: {excess_height:.2f}m")
             
         # 低空惩罚 - 低于初始位置20m
         if height_diff < -20.0:  
