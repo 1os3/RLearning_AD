@@ -32,7 +32,7 @@ training:
   
   # 断点续训
   resume_training: false       # 是否从检查点恢复训练
-  checkpoint_path: ""          # 恢复训练的检查点路径
+  checkpoint_path: ""         # 恢复训练的检查点路径
   
   # 学习率调度
   use_lr_scheduler: true       # 是否使用学习率调度器

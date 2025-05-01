@@ -260,7 +260,8 @@ def main():
     # resource_monitor.start()
     
     # 初始化内存管理器
-    memory_check_interval = config.get('memory_management', {}).get('check_interval', 1000)
+    # 将内存检查频率降低为100步一次，而非默认的1000步
+    memory_check_interval = 100  # 直接设置为100步，不使用配置值
     memory_threshold = config.get('memory_management', {}).get('emergency_threshold', 0.85)
     memory_manager = MemoryManager(
         device=device,
@@ -287,10 +288,38 @@ def main():
     # Create agent
     agent = SAC(config, device)
     
-    # Load checkpoint if specified
+    # 获取总训练步数，使其在整个函数中可用
+    total_steps = config['training'].get('total_steps', config['training'].get('num_steps', 1000000))
+    
+    # 先检查命令行参数是否指定了检查点
+    checkpoint_loaded = False
+    
+    # Load checkpoint if specified via command line
     if args.checkpoint is not None:
         agent.load(args.checkpoint, args.checkpoint_version)
-        print(f"Loaded checkpoint from {args.checkpoint} (version {args.checkpoint_version})")
+        print(f"\n✔️ 已成功从命令行参数加载检查点: {args.checkpoint} (version {args.checkpoint_version})")
+        checkpoint_loaded = True
+    # 如果命令行参数没有指定检查点，但配置文件开启了断点续训
+    elif config['training'].get('resume_training', False) and config['training'].get('checkpoint_path', ''):
+        checkpoint_path = config['training'].get('checkpoint_path', '')
+        if os.path.exists(checkpoint_path):
+            # 尝试加载检查点
+            try:
+                agent.load(os.path.dirname(checkpoint_path), os.path.basename(checkpoint_path).replace('ac_network_', '').replace('.pt', ''))
+                print(f"\n✔️ 已成功从配置文件加载检查点: {checkpoint_path}")
+                print(f"  - 算法迭代步数: {agent.updates}")
+                print(f"  - 累计训练步数: {agent.total_steps}")
+                print(f"  - 累计训练回合: {agent.episodes}")
+                print(f"  - 已完成训练进度: {(agent.total_steps / total_steps) * 100:.2f}%")
+                checkpoint_loaded = True
+            except Exception as e:
+                print(f"\n⚠️ 加载检查点失败: {checkpoint_path}")
+                print(f"  错误信息: {str(e)}")
+        else:
+            print(f"\n⚠️ 检查点文件不存在: {checkpoint_path}")
+    
+    if not checkpoint_loaded:
+        print("\n📢 创建新模型，从头开始训练")
     
     # Evaluation only mode
     if args.eval_only:
@@ -300,8 +329,7 @@ def main():
             print(f"{key}: {value}")
         return
     
-    # 训练循环变量
-    total_steps = config['training'].get('total_steps', config['training'].get('num_steps', 1000000))
+    # 训练循环其他变量
     save_freq = config['training'].get('save_freq', config['training'].get('save_interval', 10000))
     eval_freq = config['training'].get('eval_freq', config['training'].get('eval_interval', 5000))
     initial_step = agent.total_steps  # For resuming from checkpoint

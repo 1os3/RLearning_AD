@@ -498,11 +498,13 @@ class AirSimDroneEnv(gym.Env):
         # Get current state
         observation = self._get_observation()
         
-        # Calculate reward
-        reward, reward_info = self._compute_reward(scaled_action, collision)
-        
-        # Check termination conditions
+        # 检查终止条件（先调用，生成info字典）
         terminated, truncated, info = self._check_termination(collision)
+        
+        # 计算奖励，将info字典传入
+        reward, reward_info = self._compute_reward(scaled_action, collision, info)
+        
+        # 终止条件已在上面检查完毕
         
         # Add reward info to info dict
         info.update(reward_info)
@@ -762,7 +764,7 @@ class AirSimDroneEnv(gym.Env):
         return_array = np.array([float(distance_to_target), float(target_angle_xy), float(target_angle_z)], dtype=np.float32)
         return return_array
     
-    def _compute_reward(self, action: np.ndarray, collision: bool) -> Tuple[float, Dict]:
+    def _compute_reward(self, action: np.ndarray, collision: bool, info: Dict = None) -> Tuple[float, Dict]:
         """
         Compute reward based on current state, action, and target.
         
@@ -825,6 +827,14 @@ class AirSimDroneEnv(gym.Env):
         # Calculate reward components
         reward_components = {}
         
+        # 超高终止惩罚
+        # 检查传入的info字典中是否有'termination_reason'为'excessive_height'
+        excessive_height_penalty = 0.0
+        if info is not None and 'termination_reason' in info and info['termination_reason'] == 'excessive_height':
+            excessive_height_penalty = -10.0  # 超高终止给予-10的重度惩罚
+            reward_components['excessive_height_penalty'] = excessive_height_penalty
+            print(f"  [超高终止惩罚] {excessive_height_penalty:.1f}")
+        
         # Distance reward
         reward_components['distance'] = distance_improvement * distance_weight
         
@@ -860,7 +870,7 @@ class AirSimDroneEnv(gym.Env):
         if self.step_count % 50 == 0:
             print(f"\
 当前高度: {current_position[2]:.2f}m, 初始高度: {self._initial_height:.2f}m, "
-                  f"差值: {height_diff:.2f}m [>阿阿阿阿阿阿阿50=惩罚]")
+                  f"高度差: {height_diff:.2f}m [超过50m将触发惩罚]")
         
         # 高度惩罚逻辑：
         # 1. 如果无人机与初始高度差大于50m，给予惩罚
@@ -886,7 +896,7 @@ class AirSimDroneEnv(gym.Env):
             
             # 打印低空惩罚详情
             if low_altitude_penalty > 0.01:
-                print(f"  低空惩罚: {low_altitude_penalty:.4f}, 下降过度: {deficit_height:.2f}m")
+                print(f"  [低空惩罚] -{low_altitude_penalty:.4f}, 下降过度: {deficit_height:.2f}m")
             
         # 与目标高度相差过大的惩罚
         if abs(target_height_diff) > 30.0:  
@@ -896,7 +906,7 @@ class AirSimDroneEnv(gym.Env):
             
             # 打印目标高度差异惩罚详情
             if target_height_penalty > 0.01:
-                print(f"  目标高度差异惩罚: {target_height_penalty:.4f}, 高度差: {target_height_excess:.2f}m")
+                print(f"  [目标高度差异惩罚] -{target_height_penalty:.4f}, 高度差: {target_height_excess:.2f}m")
         
         reward_components['height_penalty'] = height_penalty_value
         
@@ -963,7 +973,33 @@ class AirSimDroneEnv(gym.Env):
         truncated = False
         info = {}
         
-        # Get current position
+        # 检查高度是否超限
+        # 获取当前高度和初始高度
+        drone_state = self.client.getMultirotorState()
+        current_position = drone_state.kinematics_estimated.position
+        current_height = current_position.z_val
+        
+        # 确保_initial_height已定义
+        if not hasattr(self, '_initial_height'):
+            self._initial_height = current_height
+            
+        # 计算高度差，使用AirSim的NED坐标系（负值表示向上）
+        height_diff = self._initial_height - current_height  # 正值表示当前高度高于初始高度
+        
+        # 检查是否超过60米高度限制
+        if height_diff > 60.0:
+            terminated = True
+            info['termination_reason'] = 'excessive_height'
+            # 打印超高终止信息
+            print(f"\
+[任务失败] 超过允许高度! 当前高度: {current_height:.2f}m, 初始高度: {self._initial_height:.2f}m, 高度差: {height_diff:.2f}m")
+        
+        # 如果已经因为超高度终止，则无需获取位置
+        if terminated and info.get('termination_reason') == 'excessive_height':
+            # 直接返回终止结果，无需计算其他信息
+            return terminated, truncated, info
+            
+        # 如果未终止，获取当前位置
         drone_state = self.client.getMultirotorState()
         position = drone_state.kinematics_estimated.position
         current_position = np.array([position.x_val, position.y_val, position.z_val])

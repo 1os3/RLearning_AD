@@ -43,14 +43,14 @@ environment:
   
   # 奖励设置
   reward:
-    distance_weight: 1.0
-    velocity_weight: 0.5
+    distance_weight: 2.5     # 增加距离奖励权重，鼓励积极向目标移动
+    velocity_weight: 1.0     # 增加速度奖励权重，鼓励朝向目标的速度
     orientation_weight: 0.3
     energy_weight: 0.2
     collision_penalty: 10.0
-    success_reward: 20.0
+    success_reward: 30.0     # 增加成功奖励，强化达到目标的正向反馈
     step_penalty: 0.01
-    height_penalty: 5.0  # 高度惩罚权重，当高度超过初始高度200m时开始惩罚
+    height_penalty: 2.0      # 高度惩罚权重，当高度超过初始高度50m时开始惩罚
 
   # 终止条件
   termination:
