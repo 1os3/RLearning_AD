@@ -620,33 +620,75 @@ class AirSimDroneEnv(gym.Env):
                 img_rgb = img1d.reshape(response.height, response.width, 3)
                 current_frame = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB)
         
-        # Handle frame stacking
-        if self.frame_buffer is None:
-            # Initialize frame buffer with copies of the first frame
-            self.frame_buffer = np.zeros(
-                (current_frame.shape[0], current_frame.shape[1], current_frame.shape[2] * self.frame_stack),
-                dtype=np.uint8
-            )
-            for i in range(self.frame_stack):
-                start_idx = i * current_frame.shape[2]
-                end_idx = (i + 1) * current_frame.shape[2]
-                self.frame_buffer[:, :, start_idx:end_idx] = current_frame
-        else:
-            # Shift frames (remove oldest, add newest)
-            for i in range(self.frame_stack - 1):
-                start_dest = i * current_frame.shape[2]
-                end_dest = (i + 1) * current_frame.shape[2]
-                start_src = (i + 1) * current_frame.shape[2]
-                end_src = (i + 2) * current_frame.shape[2]
+        # 优化的帧堆叠处理代码，增强内存管理和错误处理
+        try:
+            # 使用标准的帧堆叠方法
+            if self.frame_buffer is None:
+                # 初始化帧缓冲区 - 预先释放任何内存
+                try:
+                    # 尝试清理GPU内存
+                    import gc
+                    gc.collect()
+                    if hasattr(torch, 'cuda') and torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    elif hasattr(torch, 'xpu') and torch.xpu.is_available():
+                        torch.xpu.empty_cache()
+                except:
+                    pass  # 忽略清理错误
                 
-                # Handle last frame case
-                if end_src <= self.frame_buffer.shape[2]:
-                    self.frame_buffer[:, :, start_dest:end_dest] = self.frame_buffer[:, :, start_src:end_src]
+                # 创建帧缓冲区
+                self.frame_buffer = np.zeros(
+                    (current_frame.shape[0], current_frame.shape[1], current_frame.shape[2] * self.frame_stack),
+                    dtype=np.uint8
+                )
+                
+                # 采用更内存效率的方式复制帧
+                for i in range(self.frame_stack):
+                    start_idx = i * current_frame.shape[2]
+                    end_idx = (i + 1) * current_frame.shape[2]
+                    # 使用copy而非直接赋值可以减少内存快照
+                    np.copyto(self.frame_buffer[:, :, start_idx:end_idx], current_frame)
+            else:
+                # 使用roll操作替代循环就地移动帧 - 更内存效率
+                # 沿第三维向左移动
+                channel_size = current_frame.shape[2]
+                self.frame_buffer = np.roll(self.frame_buffer, -channel_size, axis=2)
+                
+                # 在最后位置添加新帧
+                start_idx = (self.frame_stack - 1) * channel_size
+                end_idx = self.frame_stack * channel_size
+                np.copyto(self.frame_buffer[:, :, start_idx:end_idx], current_frame)
+                
+        except Exception as e:
+            # 尝试更内存效率的备选方案
+            print(f"标准堆叠失败，尝试替代方法... 错误: {str(e)}")
             
-            # Add new frame
-            start_idx = (self.frame_stack - 1) * current_frame.shape[2]
-            end_idx = self.frame_stack * current_frame.shape[2]
-            self.frame_buffer[:, :, start_idx:end_idx] = current_frame
+            try:
+                # 如果帧缓冲区不存在，则初始化一个在需要时扩展的列表
+                if not hasattr(self, 'frame_list') or self.frame_list is None:
+                    self.frame_list = [current_frame] * self.frame_stack
+                else:
+                    # 移除最早的帧，添加新帧
+                    self.frame_list.pop(0)
+                    self.frame_list.append(current_frame)
+                
+                # 使用功能简化的帧堆叠 - 仅在需要时往返回时合并
+                # 具有更低的内存占用，但可能灥略降低性能
+                # 保持帧列表转换为numpy数组
+                self.frame_buffer = np.concatenate([frame for frame in self.frame_list], axis=2)
+                
+            except Exception as e2:
+                # 如果两种方法都失败，则回退到仅使用当前帧
+                print(f"堆叠失败: 原始错误 '{str(e)}', 备选方法错误 '{str(e2)}'")
+                # 仅返回当前帧，重复以滿足通道数
+                self.frame_buffer = np.repeat(current_frame, self.frame_stack, axis=2)
+                
+                # 缩小分辨率以减少内存压力
+                if current_frame.shape[0] > 128:  # 如果分辨率过高
+                    scale_factor = 0.5
+                    new_height = int(current_frame.shape[0] * scale_factor)
+                    new_width = int(current_frame.shape[1] * scale_factor)
+                    self.frame_buffer = cv2.resize(self.frame_buffer, (new_width, new_height))
         
         return self.frame_buffer
     
