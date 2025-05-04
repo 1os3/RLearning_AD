@@ -142,10 +142,11 @@ class Critic(nn.Module):
         return q_value
 
 
-class TwinCritic(nn.Module):
+class MultiCritic(nn.Module):
     """
-    Double critic architecture to reduce overestimation bias in Q-learning.
-    Implements the framework's "双Q网络降低过估计" feature.
+    Multiple critic architecture to reduce overestimation bias in Q-learning.
+    Implements the framework's "多Q网络降低过估计" feature.
+    Respects the num_critics configuration parameter.
     """
     def __init__(self, config: Optional[Dict] = None):
         """
@@ -173,9 +174,9 @@ class TwinCritic(nn.Module):
                 if 'model' in loaded_config and 'policy_module' in loaded_config['model'] \
                    and 'critic' in loaded_config['model']['policy_module']:
                     default_config = loaded_config['model']['policy_module']['critic']
-                    print("TwinCritic: 使用默认配置文件中的参数")
+                    print("MultiCritic: 使用默认配置文件中的参数")
             except Exception as e:
-                print(f"TwinCritic 警告: 无法加载配置文件 - {e}")
+                print(f"MultiCritic 警告: 无法加载配置文件 - {e}")
                 print("使用内置默认配置")
             
             # 使用默认配置进行初始化
@@ -188,39 +189,50 @@ class TwinCritic(nn.Module):
         # 确保我们不会修改原始配置
         config_copy = config.copy() if isinstance(config, dict) else {}
         
-        # 初始化两个Q网络，使用相同的架构但不同的参数
-        self.q1 = Critic(config_copy, None)  # 显式传入None作为shared_trunk
-        self.q2 = Critic(config_copy, None)  # 显式传入None作为shared_trunk
+        # 从配置中获取Q网络数量，默认为2
+        self.num_critics = config_copy.get('num_critics', 2)
+        print(f"MultiCritic: 创建 {self.num_critics} 个Q网络")
+        
+        # 设置每个Critic实例的num_critics为1，避免重复创建
+        config_copy['num_critics'] = 1
+        
+        # 初始化多个Q网络，根据配置文件中指定的数量
+        self.q_networks = nn.ModuleList([
+            Critic(config_copy, None) for _ in range(self.num_critics)
+        ])
     
-    def forward(self, state: torch.Tensor, action: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, state: torch.Tensor, action: torch.Tensor) -> List[torch.Tensor]:
         """
-        Forward pass through both critic networks.
+        Forward pass through all critic networks.
         
         Args:
             state: State features tensor (batch_size, state_dim)
             action: Action tensor (batch_size, action_dim)
             
         Returns:
-            Tuple of (q1_values, q2_values), each of shape (batch_size, 1)
+            List of Q values from each critic network
         """
-        q1 = self.q1(state, action)
-        q2 = self.q2(state, action)
+        q_values = [q_net(state, action) for q_net in self.q_networks]
         
-        return q1, q2
+        return q_values
     
     def min_q(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         """
-        Return minimum of the two Q-values to reduce overestimation bias.
+        Compute minimum Q-value across all critics.
+        Used for target computation in SAC to reduce overestimation bias.
         
         Args:
             state: State features tensor (batch_size, state_dim)
             action: Action tensor (batch_size, action_dim)
             
         Returns:
-            Minimum Q-value (batch_size, 1)
+            Minimum Q-value
         """
-        q1, q2 = self.forward(state, action)
-        return torch.min(q1, q2)
+        q_values = self.forward(state, action)
+        # 将所有Q值堆叠为形状(num_critics, batch_size, 1)的张量
+        q_stack = torch.stack(q_values, dim=0)
+        # 计算所有Q网络中的最小值
+        return torch.min(q_stack, dim=0)[0]
 
 
 class SharedTrunkCritic(nn.Module):
@@ -254,8 +266,8 @@ class SharedTrunkCritic(nn.Module):
         critic_config_copy = critic_config.copy()  # 创建副本避免修改原始配置
         critic_config_copy['trunk_dim'] = trunk_dim
         
-        # 创建TwinCritic实例并传入正确的trunk_dim
-        self.critics = TwinCritic(critic_config_copy)
+        # 创建MultiCritic实例并传入正确的trunk_dim
+        self.critics = MultiCritic(critic_config_copy)
     
     def forward(self, state, action=None) -> List[torch.Tensor]:
         """
@@ -296,41 +308,39 @@ class SharedTrunkCritic(nn.Module):
         # 将trunk输出和动作连接
         sa_features = torch.cat([trunk_output, action], dim=1)
         
-        # 从双Q网络获取两个Q值
-        q1 = self.critics.q1.q_networks[0](sa_features)
-        q2 = self.critics.q1.q_networks[1](sa_features) if len(self.critics.q1.q_networks) > 1 else q1
-        
-        return q1, q2
+        # 从MultiCritic获取所有Q值，传递trunk_output和action两个参数
+        q_values = self.critics(trunk_output, action)
+        return q_values
     
-    def min_q(self, state, action: torch.Tensor) -> torch.Tensor:
+    def min_q(self, state, action=None) -> torch.Tensor:
         """
-        Get minimum Q-value from both critics to reduce overestimation.
+        Return minimum of all Q-values to reduce overestimation bias.
+        
+        Args:
+            state: State tensor or dict
+            action: Action tensor
+            
+        Returns:
+            Minimum Q-value
+        """
+        # 获取trunk特征
+        trunk_features = self._get_trunk_features(state)
+        
+        # 计算所有Q网络的输出并返回最小值
+        return self.critics.min_q(trunk_features, action)
+    
+    def q1(self, state, action: torch.Tensor) -> torch.Tensor:
+        """
+        Get Q-value from first critic.
+        Used for policy gradient computation in SAC.
         
         Args:
             state: Raw state input tensor or dictionary of tensors
             action: Action tensor
             
         Returns:
-            Minimum Q-value (batch_size, 1)
+            Q-value from first critic (batch_size, 1)
         """
-        # 从两个Q网络中获取Q值
-        q1, q2 = self.forward(state, action)
-        
-        # 返回最小值
-        return torch.min(q1, q2)
-    
-    def q1(self, state, action: torch.Tensor) -> torch.Tensor:
-        """
-        Get Q1 value (useful for some SAC implementations).
-        
-        Args:
-            state: Raw state input tensor or dictionary
-            action: Action tensor
-            
-        Returns:
-            Q1 value (batch_size, 1)
-        """
-        # 从forward方法获取第一个Q值
-        q1, _ = self.forward(state, action)
-        
-        return q1
+        # 获取所有Q值并返回第一个
+        q_values = self.forward(state, action)
+        return q_values[0] if q_values else None

@@ -1116,6 +1116,65 @@ class AirSimDroneEnv(gym.Env):
         
         return terminated, truncated, info
     
+    def render(self, mode='human'):
+        """
+        为兼容gym接口添加的渲染方法
+        
+        Args:
+            mode: 渲染模式，可以是'human'或'rgb_array'
+            
+        Returns:
+            如果是'rgb_array'模式，返回图像数组，否则返回None
+        """
+        try:
+            if mode == 'rgb_array':
+                # 尝试获取AirSim图像
+                try:
+                    # 避免直接使用AirSim API获取图像，有时会导致错误
+                    # 直接返回一个占位图像，防止AirSim API错误
+                    # 创建一个带有简单文本的图像
+                    height, width = 480, 640  # 标准分辨率
+                    image = np.zeros((height, width, 3), dtype=np.uint8)
+                    
+                    # 添加简单文本
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    text = "AirSim Drone Environment"
+                    cv2.putText(image, text, (50, 50), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+                    
+                    # 获取当前位置和目标位置，并显示
+                    if hasattr(self, 'target_position'):
+                        drone_state = self.client.getMultirotorState()
+                        position = drone_state.kinematics_estimated.position
+                        current_pos = f"Drone: ({position.x_val:.2f}, {position.y_val:.2f}, {position.z_val:.2f})"
+                        target_pos = f"Target: ({self.target_position[0]:.2f}, {self.target_position[1]:.2f}, {self.target_position[2]:.2f})"
+                        
+                        cv2.putText(image, current_pos, (50, 100), font, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                        cv2.putText(image, target_pos, (50, 150), font, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+                        
+                        # 计算和显示距离
+                        current_position = np.array([position.x_val, position.y_val, position.z_val])
+                        distance = np.linalg.norm(self.target_position - current_position)
+                        distance_text = f"Distance: {distance:.2f}m"
+                        cv2.putText(image, distance_text, (50, 200), font, 0.7, (255, 255, 0), 2, cv2.LINE_AA)
+                    
+                    # 返回数组格式图像
+                    return image
+                except Exception as e:
+                    # 捕获所有异常并返回默认图像
+                    print(f"Warning: Error rendering AirSim image: {e}")
+                    # 返回一个黑色图像作为后备
+                    return np.zeros((240, 320, 3), dtype=np.uint8)
+            elif mode == 'human':
+                # human模式无需实际渲染
+                pass
+            
+            return None
+        except Exception as e:
+            # 捕获所有可能的渲染错误
+            print(f"Render method exception: {e}")
+            # 返回空图像
+            return np.zeros((240, 320, 3), dtype=np.uint8)
+    
     def close(self):
         """
         Close environment and release resources.

@@ -432,6 +432,11 @@ def main():
         current_episode_reward += reward
         current_episode_length += 1
         
+        # 每100步强制执行一次内存清理
+        if step % 100 == 0:
+            print(f"\n执行定期内存清理 (Step {step})...")
+            memory_manager.check_and_collect(step, logger, force=True)
+            
         # Update agent
         if step >= config['training'].get('update_after', 1000):
             update_metrics = agent.train(step)
@@ -538,6 +543,9 @@ def main():
             # 在评估前执行内存回收，确保有足够空间执行评估
             memory_manager.check_and_collect(step, logger, force=True)
             
+            # 初始化为None，确保即使评估失败也有默认值
+            eval_results = None
+            
             try:
                 print(f"Running evaluation at step {step + 1}...")
                 eval_results = evaluator.evaluate(agent)
@@ -545,12 +553,15 @@ def main():
                 # Log evaluation results
                 for key, value in eval_results.items():
                     logger.log_scalar(f"eval/{key}", value, step)
+                    
+                # 只在评估成功时打印结果
+                print(f"Evaluation at step {step + 1}: Mean Reward: {eval_results['mean_reward']:.2f}")
             except Exception as e:
                 print(f"⚠️ 评估过程中出错: {e}")
                 # 出现错误时紧急清理内存
                 memory_manager.emergency_cleanup(logger, step)
+                print(f"Evaluation at step {step + 1}: Failed due to error")
             
-            print(f"Evaluation at step {step + 1}: Mean Reward: {eval_results['mean_reward']:.2f}")
     
     # 资源监控已禁用
     # resource_monitor.stop()

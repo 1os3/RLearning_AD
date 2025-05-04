@@ -10,7 +10,7 @@ from torch.distributions import Normal
 from typing import Dict, List, Tuple, Optional, Union, Any
 
 from src.models.policy_module.actor import Actor, SharedTrunkActor
-from src.models.policy_module.critic import TwinCritic, SharedTrunkCritic
+from src.models.policy_module.critic import MultiCritic, SharedTrunkCritic
 from src.models.policy_module.shared_trunk import SharedTrunk, ActorCriticNetwork
 from src.algorithms.replay_buffer import PrioritizedReplayBuffer, Transition
 from src.algorithms.auxiliary import ContrastivePredictiveCoding, FrameReconstruction, PoseRegression
@@ -290,20 +290,21 @@ class SAC:
             entropy_bonus = self.alpha * next_log_prob  # 这是负值
             entropy_bonus = torch.clamp(entropy_bonus, min=-5.0, max=5.0)  # 限制熏气项
             
-            # Target Q-value = r + gamma * (min(Q1', Q2') - alpha * log_prob)
-            next_q1, next_q2 = self.target_critic(next_state, next_action)
+            # Target Q-value = r + gamma * (min(Q1', Q2', ...) - alpha * log_prob)
+            next_q_values = self.target_critic(next_state, next_action)
             
             # 可视化调试信息，查看Q值范围
             if self.total_steps % 100 == 0:  # 每100步打印一次调试信息
-                print(f"Debug - Q1 range: {torch.min(next_q1).item():.4f} to {torch.max(next_q1).item():.4f}")
-                print(f"Debug - Q2 range: {torch.min(next_q2).item():.4f} to {torch.max(next_q2).item():.4f}")
+                for i, q in enumerate(next_q_values):
+                    print(f"Debug - Q{i+1} range: {torch.min(q).item():.4f} to {torch.max(q).item():.4f}")
                 print(f"Debug - entropy bonus: {torch.mean(entropy_bonus).item():.4f}")
             
             # 更严格地裁剪Q值
-            next_q1 = torch.clamp(next_q1, min=-5.0, max=5.0)
-            next_q2 = torch.clamp(next_q2, min=-5.0, max=5.0)
+            next_q_values = [torch.clamp(q, min=-5.0, max=5.0) for q in next_q_values]
             
-            next_q = torch.min(next_q1, next_q2)
+            # 堆叠所有Q值并计算最小值
+            next_q_stack = torch.stack(next_q_values, dim=0)
+            next_q = torch.min(next_q_stack, dim=0)[0]
             next_q = next_q - entropy_bonus  # 这里减去熏气项
             
             # 更要求地裁剪未来Q值
@@ -326,16 +327,23 @@ class SAC:
                 print(f"Debug - reward/future ratio: {reward_ratio.item():.4f}")
         
         # Current Q estimates
-        current_q1, current_q2 = self.critic(state, action)
+        current_q_values = self.critic(state, action)
         
-        # Compute critic loss
-        critic_loss1 = F.mse_loss(current_q1, target_q, reduction='none')
-        critic_loss2 = F.mse_loss(current_q2, target_q, reduction='none')
-        
-        # Apply importance sampling weights if using PER
-        critic_loss1 = (critic_loss1 * weights).mean()
-        critic_loss2 = (critic_loss2 * weights).mean()
-        critic_loss = critic_loss1 + critic_loss2
+        # 确保至少有一个Q网络
+        if not current_q_values:
+            raise ValueError("Critic没有返回任何Q值")
+            
+        # 计算所有Q网络的损失
+        critic_losses = []
+        for i, current_q in enumerate(current_q_values):
+            # 为每个Q网络计算损失
+            critic_loss_i = F.mse_loss(current_q, target_q, reduction='none')
+            # 应用重要性采样权重
+            critic_loss_i = (critic_loss_i * weights).mean()
+            critic_losses.append(critic_loss_i)
+            
+        # 总损失是所有Q网络损失的总和
+        critic_loss = sum(critic_losses)
         
         # Update critics
         self.critic_optimizer.zero_grad()
@@ -360,14 +368,19 @@ class SAC:
         # Update priorities in PER if used
         if self.use_prioritized_replay and indices is not None:
             with torch.no_grad():
-                td_errors = torch.abs(current_q1 - target_q).detach().cpu().numpy()
+                # 支持多Q网络的TD error计算
+                # 只用第一个Q网络的TD error作为优先级（保证为一维数组）
+                if isinstance(current_q_values, (list, tuple)):
+                    td_errors = torch.abs(current_q_values[0] - target_q).detach().cpu().numpy()
+                else:
+                    td_errors = torch.abs(current_q_values - target_q).detach().cpu().numpy()
                 self.replay_buffer.update_priorities(indices, td_errors)
         
         # ------- Update Actor ------- #
         # Compute actor loss
         current_action, _, log_prob = self.actor.sample(state)
-        q1, q2 = self.critic(state, current_action)
-        min_q = torch.min(q1, q2)
+        q_values = self.critic(state, current_action)
+        min_q = torch.min(torch.stack(q_values, dim=0), dim=0)[0]  # 支持任意数量Q网络
         
         # Actor loss = alpha * log_prob - Q(s,a)
         actor_loss = (self.alpha * log_prob - min_q).mean()
@@ -416,15 +429,19 @@ class SAC:
         # Increment update counter
         self.updates += 1
         
-        # Log metrics
-        metrics.update({
+        # 记录指标
+        metrics_update = {
             'critic_loss': critic_loss.item(),
             'actor_loss': actor_loss.item(),
-            'q1_value': current_q1.mean().item(),
-            'q2_value': current_q2.mean().item(),
             'target_q': target_q.mean().item(),
             'entropy': -log_prob.mean().item()
-        })
+        }
+        
+        # 添加每个Q网络的平均值
+        for i, q in enumerate(current_q_values):
+            metrics_update[f'q{i+1}_value'] = q.mean().item()
+            
+        metrics.update(metrics_update)
         
         return metrics
     

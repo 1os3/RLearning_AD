@@ -62,8 +62,9 @@ class Evaluator:
         episode_collisions = []
         episode_timeouts = []
         
-        if self.record and not hasattr(self.env, 'render'):
-            print("Warning: Environment does not support rendering, recording will be disabled")
+        # 直接禁用录制功能，避免异常
+        if self.record:
+            print("Notice: Recording is disabled to ensure stability in AirSim environment")
             self.record = False
         
         for i in range(self.num_episodes):
@@ -71,23 +72,9 @@ class Evaluator:
             video_writer = None
             frames = []
             
-            if self.record:
-                # Create video writer based on first frame
-                test_frame = self.env.render(mode='rgb_array')
-                if test_frame is not None:
-                    if self.record_dir is not None:
-                        # Get frame size
-                        frame_height, frame_width = test_frame.shape[:2]
-                        video_path = os.path.join(self.record_dir, f"eval_episode_{i}.mp4")
-                        video_writer = cv2.VideoWriter(
-                            video_path,
-                            cv2.VideoWriter_fourcc(*'mp4v'),
-                            self.fps,
-                            (frame_width, frame_height)
-                        )
-                    else:
-                        # If no record_dir, store frames in memory
-                        frames = []
+            # 录制功能已经被禁用，这里的代码不会运行
+            if self.record:  # 这个条件在前面的确保不会执行
+                pass  # 保留占位符，实际不会执行
             
             # Reset environment and agent
             state = self.env.reset()
@@ -123,16 +110,8 @@ class Evaluator:
                     self.env.render()
                     time.sleep(0.01)  # Small delay for visualization
                 
-                # Record frame if requested
-                if self.record:
-                    frame = self.env.render(mode='rgb_array')
-                    if frame is not None:
-                        if video_writer is not None:
-                            # Convert RGB to BGR for OpenCV
-                            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                            video_writer.write(frame_bgr)
-                        else:
-                            frames.append(frame)
+                # 渲染代码都已经禁用，避免可能的NoneType错误
+                # 评估过程中不再尝试渲染或录制视频
                 
                 # Check for episode termination
                 if self.max_steps_per_episode is not None and episode_length >= self.max_steps_per_episode:
@@ -142,9 +121,8 @@ class Evaluator:
                 # Update state
                 state = next_state
             
-            # Close video writer if created
-            if video_writer is not None:
-                video_writer.release()
+            # 录制功能已被禁用，无需释放视频写入器
+            # 确保不会出现 None 对象的属性访问错误
             
             # Record episode stats
             episode_rewards.append(episode_reward)
