@@ -80,19 +80,35 @@ class SharedTrunk(nn.Module):
         
         self.trunk = nn.Sequential(*layers)
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x) -> torch.Tensor:
         """
         Forward pass through shared trunk network.
         
         Args:
-            x: Input tensor from fusion module (batch_size, fusion_dim)
+            x: Input tensor or dictionary with state/target from fusion module
             
         Returns:
             Trunk features for policy and value heads (batch_size, trunk_dim)
         """
+        # 处理字典类型的输入
+        if isinstance(x, dict):
+            # 处理字典类型的输入
+            if 'state' in x and 'target' in x:
+                # 将状态和目标向量连接
+                features = torch.cat([x['state'], x['target']], dim=-1)
+            elif 'state' in x:
+                # 仅使用状态向量
+                features = x['state']
+            else:
+                raise ValueError("SharedTrunk需要'state'组件")
+            trunk_input = features
+        else:
+            # 标准Tensor输入，直接使用
+            trunk_input = x
+        
         # 如果是第一次前向传递，检查实际输入维度并定义网络
-        if hasattr(self, 'first_forward') and self.first_forward and x is not None:
-            actual_dim = x.shape[-1]  # 获取实际输入维度
+        if hasattr(self, 'first_forward') and self.first_forward and trunk_input is not None:
+            actual_dim = trunk_input.shape[-1]  # 获取实际输入维度
             
             if actual_dim != self.fusion_dim:
                 print(f"\n检测到输入维度与配置不符，已自动调整: {self.fusion_dim} -> {actual_dim}")
@@ -103,7 +119,7 @@ class SharedTrunk(nn.Module):
             self.first_forward = False
             print(f"SharedTrunk 输入维度: {self.fusion_dim}, 输出维度: {self.trunk_dim}")
         
-        return self.trunk(x)
+        return self.trunk(trunk_input)
 
 
 class ActorCriticNetwork(nn.Module):

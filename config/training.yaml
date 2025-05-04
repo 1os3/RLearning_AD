@@ -16,15 +16,15 @@ training:
   # 训练基本参数
   batch_size: 512              # 增大批量大小，提高并行效率
   num_steps: 2000000           # 总训练步数
-  warmup_steps: 2000           # 增加预热步数，收集更多初始数据
+  warmup_steps: 2000          # 增加预热步数，收集更多初始数据
   update_after: 2000           # 延迟更新开始时间，确保有足够样本
   update_every: 2              # 减少更新频率，但增加每次更新力度
   num_updates: 2               # 每次触发更新时进行更多次网络更新
   gradient_steps: 2            # 增加每次更新的梯度步数
-  seed: 42
+  seed: 128
   
   # 评估与保存
-  eval_interval: 10000          # 每多少步评估一次
+  eval_interval: 1000          # 每多少步评估一次
   eval_episodes: 5             # 每次评估的回合数
   save_interval: 1000         # 每多少步保存模型
   save_best_only: true        # 是否只保存最佳模型
@@ -43,7 +43,7 @@ training:
 # 辅助任务调整
 algorithm:
   # 基本算法参数
-  gamma: 0.99
+  gamma: 0.95  # 降低折扣因子，减少未来奖励权重，防止Q值爆炸
   tau: 0.005
   
   # 学习率优化

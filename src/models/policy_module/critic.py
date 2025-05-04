@@ -239,6 +239,8 @@ class SharedTrunkCritic(nn.Module):
         super().__init__()
         
         self.trunk = trunk_network
+        # 添加shared_trunk属性表示使用共享trunk
+        self.shared_trunk = True  # 设置为True因为这个类始终使用共享trunk
         
         # 获取trunk_network的输出维度
         if hasattr(trunk_network, 'trunk_dim'):
@@ -294,10 +296,11 @@ class SharedTrunkCritic(nn.Module):
         # 将trunk输出和动作连接
         sa_features = torch.cat([trunk_output, action], dim=1)
         
-        # 从多个Q网络中获取Q值
-        q_values = [net(sa_features) for net in self.critics.q1.q_networks]
+        # 从双Q网络获取两个Q值
+        q1 = self.critics.q1.q_networks[0](sa_features)
+        q2 = self.critics.q1.q_networks[1](sa_features) if len(self.critics.q1.q_networks) > 1 else q1
         
-        return q_values
+        return q1, q2
     
     def min_q(self, state, action: torch.Tensor) -> torch.Tensor:
         """
@@ -310,25 +313,24 @@ class SharedTrunkCritic(nn.Module):
         Returns:
             Minimum Q-value (batch_size, 1)
         """
-        # Extract features using shared trunk
-        state_features = self.trunk(state)
+        # 从两个Q网络中获取Q值
+        q1, q2 = self.forward(state, action)
         
-        # Get minimum Q-value
-        min_q = self.critics.min_q(state_features, action)
-        
-        return min_q
+        # 返回最小值
+        return torch.min(q1, q2)
     
-    def q1(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+    def q1(self, state, action: torch.Tensor) -> torch.Tensor:
         """
         Get Q1 value (useful for some SAC implementations).
         
         Args:
-            state: Raw state input tensor
+            state: Raw state input tensor or dictionary
             action: Action tensor
             
         Returns:
             Q1 value (batch_size, 1)
         """
-        state_features = self.trunk(state)
-        q1 = self.critics.q1(state_features, action)
+        # 从forward方法获取第一个Q值
+        q1, _ = self.forward(state, action)
+        
         return q1

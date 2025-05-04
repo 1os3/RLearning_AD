@@ -57,11 +57,12 @@ class ContrastivePredictiveCoding(nn.Module):
             self.temperature = 0.1
             self.use_gru = True
         
-        # Define encoder network (converts state to latent representation)
-        # 使用实际状态向量维度而不是预定义的embedding_dim
-        self.state_dim = 15  # 实际特征维度是9维状态+6维目标=15维
-        print(f"CPC辅助任务使用输入维度: {self.state_dim}, 输出维度: {self.output_dim}")
+        # 创建初始编码器，使用默认维度，但允许在首次前向传递时动态更新
+        self.state_dim = 18  # 默认值，实际会在首次前向传递时动态调整
+        self.first_forward = True  # 标记是否是首次前向传递
+        print(f"CPC辅助任务使用初始输入维度: {self.state_dim}, 输出维度: {self.output_dim}。将在首次前向传递时动态调整")
         
+        # 首先创建默认编码器，使优化器有参数可用
         self.encoder = nn.Sequential(
             nn.Linear(self.state_dim, self.hidden_dim),
             nn.ReLU(inplace=True),
@@ -125,6 +126,22 @@ class ContrastivePredictiveCoding(nn.Module):
             next_state_features = next_state
             
         batch_size = state_features.shape[0]
+        
+        # 如果是首次前向传递，动态创建encoder
+        if self.first_forward:
+            actual_dim = state_features.shape[-1]  # 获取实际输入维度
+            if self.state_dim != actual_dim:
+                self.state_dim = actual_dim
+                print(f"\nCPC辅助任务检测到输入维度为{actual_dim}。动态创建编码器网络")
+            
+            # 构建encoder网络
+            self.encoder = nn.Sequential(
+                nn.Linear(self.state_dim, self.hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.hidden_dim, self.output_dim)
+            ).to(state_features.device)  # 确保网络在正确的设备上
+            self.first_forward = False
+            print(f"CPC辅助任务编码器已创建，输入维度: {self.state_dim}, 输出维度: {self.output_dim}, 设备: {state_features.device}")
         
         # Encode current and next state
         z_t = self.encoder(state_features)  # Current state embedding
@@ -217,17 +234,21 @@ class FrameReconstruction(nn.Module):
             
         print(f"FrameReconstruction辅助任务输入维度: {self.state_dim + self.action_dim}, 输出维度: {self.output_dim}")
         
-        # Build network layers
+        # 创建初始网络，使用默认维度，但允许在首次前向传递时动态更新
+        self.first_forward = True  # 标记是否是首次前向传递
+        print(f"FrameReconstruction辅助任务使用初始输入维度: {self.state_dim}, 输出维度: {self.output_dim}。将在首次前向传递时动态调整")
+        
+        # 首先创建默认网络，使优化器有参数可用
         layers = []
-        input_dim = self.state_dim + self.action_dim  # Concatenated state and action
+        in_dim = self.state_dim + self.action_dim  # 连接状态和动作
         
         for hidden_dim in self.hidden_dims:
-            layers.append(nn.Linear(input_dim, hidden_dim))
+            layers.append(nn.Linear(in_dim, hidden_dim))
             layers.append(nn.ReLU(inplace=True))
-            input_dim = hidden_dim
+            in_dim = hidden_dim
         
-        # Output layer for reconstructed next state
-        layers.append(nn.Linear(input_dim, self.output_dim))
+        # 输出层
+        layers.append(nn.Linear(in_dim, self.output_dim))
         
         self.network = nn.Sequential(*layers)
     
@@ -243,18 +264,19 @@ class FrameReconstruction(nn.Module):
         Returns:
             Reconstruction loss
         """
-        # 处理字典类型的状态输入
+        # 处理字典类型输入
         if isinstance(state, dict):
+            # 与其他模块保持一致的特征提取逻辑
             if 'state' in state and 'target' in state:
                 state_features = torch.cat([state['state'], state['target']], dim=-1)
             elif 'state' in state:
                 state_features = state['state']
             else:
-                raise ValueError("FrameReconstruction需要'state'组件")
+                raise ValueError("FrameReconstruction辅助任务需要'state'组件")
         else:
             state_features = state
             
-        # 处理字典类型的next_state输入
+        # 处理next_state字典
         if isinstance(next_state, dict):
             if 'state' in next_state and 'target' in next_state:
                 next_state_features = torch.cat([next_state['state'], next_state['target']], dim=-1)
@@ -265,19 +287,56 @@ class FrameReconstruction(nn.Module):
         else:
             next_state_features = next_state
         
-        # Concatenate state features and action
-        x = torch.cat([state_features, action], dim=1)
+        # 如果是首次前向传递，动态创建network
+        if self.first_forward:
+            actual_dim = state_features.shape[-1]  # 获取实际输入维度
+            if self.state_dim != actual_dim or self.output_dim != actual_dim:
+                self.state_dim = actual_dim
+                self.output_dim = actual_dim  # 确保输出维度与输入相同
+                print(f"\nFrameReconstruction辅助任务检测到输入维度为{actual_dim}。动态创建网络")
+            
+            # 构建网络
+            layers = []
+            in_dim = self.state_dim + self.action_dim  # 连接状态和动作
+            
+            for hidden_dim in self.hidden_dims:
+                layers.append(nn.Linear(in_dim, hidden_dim))
+                layers.append(nn.ReLU(inplace=True))
+                in_dim = hidden_dim
+            
+            # 输出层
+            layers.append(nn.Linear(in_dim, self.output_dim))
+            
+            self.network = nn.Sequential(*layers).to(state_features.device)  # 确保网络在正确的设备上
+            self.first_forward = False
+            print(f"FrameReconstruction辅助任务网络已创建，输入维度: {self.state_dim + self.action_dim}, 输出维度: {self.output_dim}, 设备: {state_features.device}")
         
-        # Forward pass through reconstruction network
-        predicted_next_state = self.network(x)
+        # 连接状态和动作
+        sa = torch.cat([state_features, action], dim=1)
         
-        # Compute reconstruction loss
+        # 预测下一个状态
+        pred_next_state = self.network(sa)
+        
+        # 计算重建损失，但添加值裁剪和缩放以防止损失过大
+        # 首先裁剪预测值和目标值，防止极端值
+        pred_next_state_clipped = torch.clamp(pred_next_state, -10.0, 10.0)
+        next_state_features_clipped = torch.clamp(next_state_features, -10.0, 10.0)
+        
         if self.use_l2_loss:
-            # MSE loss
-            loss = F.mse_loss(predicted_next_state, next_state_features)
+            # 计算MSE损失但缩小权重
+            raw_loss = F.mse_loss(pred_next_state_clipped, next_state_features_clipped, reduction='none')
+            # 应用额外的损失缩放因子(0.01)来降低此任务的权重
+            loss = raw_loss.mean() * 0.01
+            
+            # 输出调试信息
+            if torch.rand(1).item() < 0.01:  # 1%概率打印
+                with torch.no_grad():
+                    unclamped_loss = F.mse_loss(pred_next_state, next_state_features)
+                    print(f"FrameReconstruction - 原始损失: {unclamped_loss.item():.4f}, 裁剪后损失: {loss.item():.4f}")
         else:
-            # L1 loss (more robust to outliers)
-            loss = F.l1_loss(predicted_next_state, next_state_features)
+            # 计算L1损失但缩小权重
+            raw_loss = F.l1_loss(pred_next_state_clipped, next_state_features_clipped, reduction='none')
+            loss = raw_loss.mean() * 0.01
         
         return loss
 
@@ -340,17 +399,21 @@ class PoseRegression(nn.Module):
         self.register_buffer('running_var', torch.ones(self.pose_dim))
         self.register_buffer('count', torch.tensor(0, dtype=torch.long))
         
-        # Build regression network
+        # 创建初始网络，使用默认维度，但允许在首次前向传递时动态更新
+        self.first_forward = True  # 标记是否是首次前向传递
+        print(f"PoseRegression辅助任务使用初始输入维度: {self.state_dim}, 输出维度: {self.pose_dim}。将在首次前向传阒时动态调整")
+        
+        # 首先创建默认网络，使优化器有参数可用
         layers = []
-        input_dim = self.state_dim + self.action_dim  # Concatenated state and action
+        in_dim = self.state_dim + self.action_dim  # 连接状态和动作
         
         for hidden_dim in self.hidden_dims:
-            layers.append(nn.Linear(input_dim, hidden_dim))
+            layers.append(nn.Linear(in_dim, hidden_dim))
             layers.append(nn.ReLU(inplace=True))
-            input_dim = hidden_dim
+            in_dim = hidden_dim
         
-        # Output layer for pose prediction
-        layers.append(nn.Linear(input_dim, self.pose_dim))
+        # 输出层
+        layers.append(nn.Linear(in_dim, self.pose_dim))
         
         self.network = nn.Sequential(*layers)
     
@@ -447,23 +510,19 @@ class PoseRegression(nn.Module):
         Returns:
             Pose regression loss
         """
-        # 处理字典类型的状态输入
+        # 处理字典类型输入
         if isinstance(state, dict):
+            # 与其他模块保持一致的特征提取逻辑
             if 'state' in state and 'target' in state:
                 state_features = torch.cat([state['state'], state['target']], dim=-1)
-            if 'state' in state and state['state'] is not None:
-                # 检查状态形状是否合理
-                state_shape = state['state'].shape
-                if len(state_shape) < 2:
-                    raise ValueError(f"PoseRegression需要形状为(B,D)的状态，但得到: {state_shape}")
             elif 'state' in state:
                 state_features = state['state']
             else:
-                raise ValueError("PoseRegression需要'state'组件")
+                raise ValueError("PoseRegression辅助任务需要'state'组件")
         else:
             state_features = state
             
-        # 处理字典类型的next_state输入
+        # 处理next_state字典
         if isinstance(next_state, dict):
             if 'state' in next_state and 'target' in next_state:
                 next_state_features = torch.cat([next_state['state'], next_state['target']], dim=-1)
@@ -479,6 +538,34 @@ class PoseRegression(nn.Module):
         else:
             next_state_features = next_state
             
+        # 如果是首次前向传递，动态创建network
+        if self.first_forward:
+            actual_dim = state_features.shape[-1]  # 获取实际输入维度
+            if self.state_dim != actual_dim:
+                self.state_dim = actual_dim
+                print(f"\nPoseRegression辅助任务检测到输入维度为{actual_dim}。动态创建网络")
+            
+            # 构建网络
+            layers = []
+            in_dim = self.state_dim + self.action_dim  # 连接状态和动作
+            
+            for hidden_dim in self.hidden_dims:
+                layers.append(nn.Linear(in_dim, hidden_dim))
+                layers.append(nn.ReLU(inplace=True))
+                in_dim = hidden_dim
+            
+            # 输出层
+            layers.append(nn.Linear(in_dim, self.pose_dim))
+            
+            self.network = nn.Sequential(*layers).to(state_features.device)  # 确保网络在正确的设备上
+            self.first_forward = False
+            print(f"PoseRegression辅助任务网络已创建，输入维度: {self.state_dim + self.action_dim}, 输出维度: {self.pose_dim}, 设备: {state_features.device}")
+            
+            # 确保 running_mean 和 running_var 也在同一个设备上
+            self.running_mean = self.running_mean.to(state_features.device)
+            self.running_var = self.running_var.to(state_features.device)
+            self.count = self.count.to(state_features.device)
+        
         # Extract target pose from next state features
         target_pose = self.extract_pose_from_state(next_state_features)
         

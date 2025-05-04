@@ -274,16 +274,56 @@ class SAC:
         state, action, reward, next_state, done = batch
         
         # ------- Update Critics ------- #
+        # 先检查奖励范围，确保不会出现异常值
+        reward_clipped = torch.clamp(reward, min=-5.0, max=5.0)  # 裁剪奖励
+        if self.total_steps % 100 == 0:
+            print(f"Debug - reward range: {torch.min(reward).item():.4f} to {torch.max(reward).item():.4f}")
+            print(f"Debug - reward clipped: {torch.min(reward_clipped).item():.4f} to {torch.max(reward_clipped).item():.4f}")
+        
         # Compute target Q-value
         with torch.no_grad():
             # Sample action from policy for next state
             next_action, _, next_log_prob = self.actor.sample(next_state)
             
-            # Target Q-value = r + gamma * min(Q1', Q2') - alpha * log_prob
+            # 裁剪 entropy 项以防止异常值
+            next_log_prob = torch.clamp(next_log_prob, min=-5.0, max=2.0)
+            entropy_bonus = self.alpha * next_log_prob  # 这是负值
+            entropy_bonus = torch.clamp(entropy_bonus, min=-5.0, max=5.0)  # 限制熏气项
+            
+            # Target Q-value = r + gamma * (min(Q1', Q2') - alpha * log_prob)
             next_q1, next_q2 = self.target_critic(next_state, next_action)
+            
+            # 可视化调试信息，查看Q值范围
+            if self.total_steps % 100 == 0:  # 每100步打印一次调试信息
+                print(f"Debug - Q1 range: {torch.min(next_q1).item():.4f} to {torch.max(next_q1).item():.4f}")
+                print(f"Debug - Q2 range: {torch.min(next_q2).item():.4f} to {torch.max(next_q2).item():.4f}")
+                print(f"Debug - entropy bonus: {torch.mean(entropy_bonus).item():.4f}")
+            
+            # 更严格地裁剪Q值
+            next_q1 = torch.clamp(next_q1, min=-5.0, max=5.0)
+            next_q2 = torch.clamp(next_q2, min=-5.0, max=5.0)
+            
             next_q = torch.min(next_q1, next_q2)
-            next_q = next_q - self.alpha * next_log_prob
-            target_q = reward + (1 - done) * self.gamma * next_q
+            next_q = next_q - entropy_bonus  # 这里减去熏气项
+            
+            # 更要求地裁剪未来Q值
+            next_q = torch.clamp(next_q, min=-5.0, max=5.0)
+            
+            # 确保目标Q值在合理范围内 
+            # 降低gamma对计算的影响，直接使用较小的gamma值
+            gamma_adjusted = min(self.gamma, 0.9)  # 确保在计算目标Q时gamma不超过0.9
+            future_reward = (1 - done) * gamma_adjusted * next_q
+            future_reward = torch.clamp(future_reward, min=-5.0, max=5.0)  # 裁剪未来奖励
+            
+            target_q = reward_clipped + future_reward  # 使用裁剪后的奖励
+            target_q = torch.clamp(target_q, min=-10.0, max=10.0)  # 显示限制目标Q值范围
+            
+            if self.total_steps % 100 == 0:
+                print(f"Debug - target_q stats: mean={torch.mean(target_q).item():.4f}, min={torch.min(target_q).item():.4f}, max={torch.max(target_q).item():.4f}")
+                print(f"Debug - future_reward: {torch.mean(future_reward).item():.4f}, gamma_adjusted: {gamma_adjusted:.4f}")
+                # 检查reward和future_reward的比例
+                reward_ratio = torch.mean(torch.abs(reward_clipped)) / (torch.mean(torch.abs(future_reward)) + 1e-6)
+                print(f"Debug - reward/future ratio: {reward_ratio.item():.4f}")
         
         # Current Q estimates
         current_q1, current_q2 = self.critic(state, action)
@@ -300,6 +340,21 @@ class SAC:
         # Update critics
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        
+        # 添加梯度裁剪，防止梯度爆炸
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
+        
+        # 打印梯度信息（调试用）
+        if self.total_steps % 100 == 0:
+            grad_norm = 0.0
+            for p in self.critic.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    grad_norm += param_norm.item() ** 2
+            grad_norm = grad_norm ** 0.5
+            print(f"Debug - Critic梯度范数: {grad_norm:.4f}")
+            print(f"Debug - Critic损失: {critic_loss.item():.4f}")
+        
         self.critic_optimizer.step()
         
         # Update priorities in PER if used
