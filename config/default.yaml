@@ -89,59 +89,70 @@ model:
     image_processor:
       backbone: efficientnet  # 可选: efficientnet, resnet, mobilenet
       pretrained: true
-      feature_dim: 512
+      feature_dim: 768       # 增大特征维度，提高表达能力
       patch_size: 16  # 动态patch大小的初始值
+      attention_heads: 12    # 注意力头数
+      dropout_rate: 0.1      # dropout率
+      min_patch_size: 8      # 最小patch大小
+      max_patch_size: 32     # 最大patch大小
     
     # 姿态编码器
     pose_encoder:
       input_dim: 12  # 速度(3), 加速度(3), 角度(3), 角速度(3)
-      hidden_dims: [128, 256, 512]  # 增加中间层维度和层数
-      output_dim: 256
+      hidden_dims: [128, 256, 384, 512, 640]  # 更深层次和更大维度
+      output_dim: 384    # 增大输出维度
     
     # 目标编码器
     target_encoder:
       input_dim: 3  # 距离(1), 相对方向(2)
-      hidden_dims: [64, 128]  # 增加中间层维度和层数
-      output_dim: 128
+      hidden_dims: [64, 128, 256, 384]  # 增加中间层维度和层数
+      output_dim: 256    # 增大输出维度
   
   # 多模态融合模块
   fusion_module:
     # 3D-Depthwise卷积
     depthwise_conv:
-      spatial_kernel_size: 3
-      temporal_kernel_size: 5  # 增加时间维度的卷积核大小
-      channels: 768  # 增加通道数
+      spatial_kernel_size: 5    # 增大空间卷积核大小
+      temporal_kernel_size: 7  # 增加时间维度的卷积核大小
+      channels: 1024  # 显著增加通道数
     
     # Cross-modal Transformer
     cross_attention:
-      num_heads: 12  # 增加注意力头数
-      hidden_dim: 768  # 增加隐含维度
-      dropout: 0.1
-      num_layers: 6  # 增加层数
+      num_heads: 16  # 增加注意力头数
+      hidden_dim: 1024  # 显著增加隐含维度
+      dropout: 0.15   # 优化dropout率
+      num_layers: 12  # 增加层数
     
     # 记忆库
     memory_bank:
-      memory_size: 32  # 增加记忆库大小
-      key_dim: 768  # 增加Key维度
-      value_dim: 768  # 增加Value维度
+      memory_size: 64  # 显著增加记忆库大小
+      key_dim: 1024  # 显著增加Key维度
+      value_dim: 1024  # 显著增加Value维度
       use_attention_retrieval: true
+      num_heads: 8    # 为检索添加多头注意力
   
   # 策略模块
   policy_module:
-    trunk_dim: 768  # 增大共享trunk的输出维度
+    trunk_dim: 1024     # 显著增大共享trunk的输出维度
+    trunk_hidden_dims: [256, 512, 768, 1024]  # 操控trunk内部结构
+    use_layernorm: true    # 使用层正则化
+    dropout_rate: 0.15     # 增大dropout提高正则化
+    activation: relu     # 保持原有的激活函数
     
     # Actor网络
     actor:
-      hidden_dims: [512, 384, 256]  # 增加层数和维度
-      activation: relu
+      hidden_dims: [768, 512, 384, 256]  # 增加层数和调整维度分布
+      activation: relu     # 保持原有的激活函数
       log_std_min: -10
       log_std_max: 2
+      use_layernorm: true   # 使用层正则化
     
     # Critic网络
     critic:
-      hidden_dims: [512, 384, 256]  # 增加层数和维度
-      activation: relu
-      num_critics: 2  # 双Q网络降低过估计
+      hidden_dims: [768, 512, 384, 256]  # 增加层数和调整维度分布
+      activation: relu     # 保持原有的激活函数
+      num_critics: 3       # 使用3个Q网络进一步降低过估计
+      use_layernorm: true   # 使用层正则化
 
 # 算法设置
 algorithm:

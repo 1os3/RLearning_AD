@@ -14,31 +14,31 @@ general:
 # 训练特定设置
 training:
   # 训练基本参数
-  batch_size: 256
+  batch_size: 512              # 增大批量大小，提高并行效率
   num_steps: 2000000           # 总训练步数
-  warmup_steps: 1000           # 预热步数，仅收集数据不进行优化
-  update_after: 1000           # 开始更新前的步数
-  update_every: 1              # 每多少步更新一次
-  num_updates: 1               # 每次更新多少次
-  gradient_steps: 1            # 每次更新多少次梯度步
+  warmup_steps: 2000           # 增加预热步数，收集更多初始数据
+  update_after: 2000           # 延迟更新开始时间，确保有足够样本
+  update_every: 2              # 减少更新频率，但增加每次更新力度
+  num_updates: 2               # 每次触发更新时进行更多次网络更新
+  gradient_steps: 2            # 增加每次更新的梯度步数
   seed: 42
   
   # 评估与保存
-  eval_interval: 5000          # 每多少步评估一次
+  eval_interval: 10000          # 每多少步评估一次
   eval_episodes: 5             # 每次评估的回合数
   save_interval: 1000         # 每多少步保存模型
-  save_best_only: false        # 是否只保存最佳模型
+  save_best_only: true        # 是否只保存最佳模型
   max_checkpoints: 5           # 最多保存的检查点数量
   
   # 断点续训
   resume_training: false       # 是否从检查点恢复训练
   checkpoint_path: ""         # 恢复训练的检查点路径
   
-  # 学习率调度
+  # 学习率调度优化
   use_lr_scheduler: true       # 是否使用学习率调度器
   lr_scheduler: cosine         # 学习率调度器类型: linear, cosine, step
-  lr_warmup_steps: 10000       # 学习率预热步数
-  lr_min_factor: 0.1           # 学习率最小缩放因子
+  lr_warmup_steps: 20000       # 延长学习率预热步数，确保稳定开始
+  lr_min_factor: 0.05          # 降低学习率最小缩放因子，允许更细致探索
 
 # 辅助任务调整
 algorithm:
@@ -46,19 +46,24 @@ algorithm:
   gamma: 0.99
   tau: 0.005
   
-  # 学习率调整
-  actor_lr: 3e-4
-  critic_lr: 3e-4
-  alpha_lr: 3e-4
+  # 学习率优化
+  actor_lr: 1e-4             # 降低actor学习率，增强训练稳定性
+  critic_lr: 2e-4            # 降低critic学习率，但保持略高于actor
+  alpha_lr: 5e-5             # 大幅降低熵系数学习率，避免过早收敛
   
   # SAC特定设置
   automatic_entropy_tuning: true
-  target_entropy_scale: 0.98
+  target_entropy_scale: 0.95    # 略微降低目标熵缩放因子，鼓励更多探索
+  init_alpha: 0.1              # 降低初始alpha值，逐步提高探索性
+  tau: 0.001                  # 减小目标网络更新速率，提高稳定性
   
   # 经验回放深度调整
   replay_buffer:
-    capacity: 500000   # 回放缓冲区大小
+    capacity: 100000   # 增大回放缓冲区大小，改善长期记忆
     use_per: true      # 使用优先经验回放
+    per_alpha: 0.7     # 提高优先回放重要性，更关注有价值样本
+    per_beta_start: 0.5 # 提高初始beta，减轻重要性采样偏差
+    per_beta_frames: 200000 # 延长beta增长周期，改善长期训练稳定性
     alpha: 0.6
     beta: 0.4
     beta_increment: 0.0001
