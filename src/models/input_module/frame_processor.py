@@ -433,21 +433,51 @@ class FrameProcessor(nn.Module):
         else:
             raise ValueError(f"Unsupported backbone: {self.backbone}")
         
+        # 从配置中读取动态补丁提取参数
+        min_patch_size = config.get('min_patch_size', 8)
+        max_patch_size = config.get('max_patch_size', 32)
+        
+        # 输出日志
+        print(f"FrameProcessor 动态补丁提取配置:")
+        print(f"  - 基准补丁大小: {self.patch_size}")
+        print(f"  - 最小补丁大小: {min_patch_size}")
+        print(f"  - 最大补丁大小: {max_patch_size}")
+        
         # Dynamic patch extraction
         self.dynamic_patch_extractor = DynamicPatchExtractor(
             in_channels=3,  # RGB input
             base_patch_size=self.patch_size,
-            min_patch_size=8,
-            max_patch_size=32
+            min_patch_size=min_patch_size,
+            max_patch_size=max_patch_size
         )
+        
+        # 从配置文件中获取空间时序卷积参数
+        # 首先使用模型级别的fusion_module.depthwise_conv配置
+        fusion_config = full_config.get('model', {}).get('fusion_module', {}) if 'full_config' in locals() else {}
+        depthwise_config = fusion_config.get('depthwise_conv', {})
+        
+        # 从配置中读取卷积参数，提供默认值
+        spatial_kernel_size = depthwise_config.get('spatial_kernel_size', 3)
+        temporal_kernel_size = depthwise_config.get('temporal_kernel_size', 3)
+        
+        # 输出日志
+        print(f"FrameProcessor 空间时序卷积配置:")
+        print(f"  - 空间卷积核大小: {spatial_kernel_size}")
+        print(f"  - 时间卷积核大小: {temporal_kernel_size}")
+        print(f"  - 输入通道数: {self.backbone_channels}")
+        print(f"  - 输出特征维度: {self.feature_dim}")
+        
+        # 计算适当的padding值
+        spatial_padding = spatial_kernel_size // 2
+        temporal_padding = temporal_kernel_size // 2
         
         # Factorized 3D Depthwise convolution for spatiotemporal processing
         self.spatiotemporal_conv = FactorizedDepthwiseSpatiotemporalConv(
             in_channels=self.backbone_channels,
             out_channels=self.feature_dim,
-            spatial_kernel_size=3,
-            temporal_kernel_size=3,
-            padding=(1, 1, 1)
+            spatial_kernel_size=spatial_kernel_size,
+            temporal_kernel_size=temporal_kernel_size,
+            padding=(temporal_padding, spatial_padding, spatial_padding)
         )
         
         # Lightweight attention for aggregating information

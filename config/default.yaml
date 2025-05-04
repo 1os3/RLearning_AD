@@ -39,7 +39,7 @@ environment:
     use_velocity: true
     use_acceleration: true
     use_orientation: true
-    use_angular_velocity: false
+    use_angular_velocity: true
   
   # 奖励设置
   reward:
@@ -172,7 +172,7 @@ algorithm:
   
   # 优先经验回放
   replay_buffer:
-    capacity: 1000000
+    capacity: 50000
     use_per: true  # 使用优先经验回放
     alpha: 0.6
     beta: 0.4

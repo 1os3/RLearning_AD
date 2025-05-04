@@ -31,7 +31,13 @@ class ContrastivePredictiveCoding(nn.Module):
             )
             with open(config_path, 'r') as f:
                 full_config = yaml.safe_load(f)
-            config = full_config['auxiliary_tasks']['contrastive']
+            
+            # 正确读取配置路径algorithm.auxiliary.contrastive
+            algorithm_config = full_config.get('algorithm', {})
+            auxiliary_config = algorithm_config.get('auxiliary', {})
+            config = auxiliary_config.get('contrastive', {})
+            
+            print(f"ContrastivePredictiveCoding 从配置路径加载: {'algorithm.auxiliary.contrastive' if 'contrastive' in auxiliary_config else '默认值'}")
         
         # Get parameters from config
         if isinstance(config, dict):
@@ -183,7 +189,13 @@ class FrameReconstruction(nn.Module):
             )
             with open(config_path, 'r') as f:
                 full_config = yaml.safe_load(f)
-            config = full_config['auxiliary_tasks']['reconstruction']
+            
+            # 正确读取配置路径algorithm.auxiliary.reconstruction
+            algorithm_config = full_config.get('algorithm', {})
+            auxiliary_config = algorithm_config.get('auxiliary', {})
+            config = auxiliary_config.get('reconstruction', {})
+            
+            print(f"FrameReconstruction 从配置路径加载: {'algorithm.auxiliary.reconstruction' if 'reconstruction' in auxiliary_config else '默认值'}")
         
         # Get parameters from config
         if isinstance(config, dict):
@@ -295,7 +307,13 @@ class PoseRegression(nn.Module):
             )
             with open(config_path, 'r') as f:
                 full_config = yaml.safe_load(f)
-            config = full_config['auxiliary_tasks']['pose_regression']
+            
+            # 正确读取配置路径algorithm.auxiliary.pose_regression
+            algorithm_config = full_config.get('algorithm', {})
+            auxiliary_config = algorithm_config.get('auxiliary', {})
+            config = auxiliary_config.get('pose_regression', {})
+            
+            print(f"PoseRegression 从配置路径加载: {'algorithm.auxiliary.pose_regression' if 'pose_regression' in auxiliary_config else '默认值'}")
         
         # Get parameters from config
         if isinstance(config, dict):
@@ -433,6 +451,11 @@ class PoseRegression(nn.Module):
         if isinstance(state, dict):
             if 'state' in state and 'target' in state:
                 state_features = torch.cat([state['state'], state['target']], dim=-1)
+            if 'state' in state and state['state'] is not None:
+                # 检查状态形状是否合理
+                state_shape = state['state'].shape
+                if len(state_shape) < 2:
+                    raise ValueError(f"PoseRegression需要形状为(B,D)的状态，但得到: {state_shape}")
             elif 'state' in state:
                 state_features = state['state']
             else:
@@ -444,6 +467,11 @@ class PoseRegression(nn.Module):
         if isinstance(next_state, dict):
             if 'state' in next_state and 'target' in next_state:
                 next_state_features = torch.cat([next_state['state'], next_state['target']], dim=-1)
+            if 'state' in next_state and next_state['state'] is not None:
+                # 检查下一状态形状是否合理
+                next_state_shape = next_state['state'].shape
+                if len(next_state_shape) < 2:
+                    raise ValueError(f"PoseRegression需要形状为(B,D)的下一状态，但得到: {next_state_shape}")
             elif 'state' in next_state:
                 next_state_features = next_state['state']
             else:

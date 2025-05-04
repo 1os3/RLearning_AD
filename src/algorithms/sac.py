@@ -34,25 +34,63 @@ class SAC:
         self.config = config
         self.device = device
         
-        # Extract SAC hyperparameters
-        self.gamma = config.get('gamma', 0.99)  # Discount factor
-        self.tau = config.get('tau', 0.005)     # Target network update rate
-        self.alpha_lr = config.get('alpha_lr', 3e-4)  # Entropy temperature learning rate
-        self.actor_lr = config.get('actor_lr', 3e-4)  # Actor learning rate
-        self.critic_lr = config.get('critic_lr', 3e-4)  # Critic learning rate
-        self.buffer_size = config.get('buffer_size', 1_000_000)  # Replay buffer size
-        self.batch_size = config.get('batch_size', 256)  # Batch size for updates
-        self.init_alpha = config.get('init_alpha', 0.2)  # Initial entropy coefficient
-        self.target_update_interval = config.get('target_update_interval', 1)  # Freq of target updates
-        self.use_automatic_entropy_tuning = config.get('use_automatic_entropy_tuning', True)  # Auto adjust alpha
-        self.use_prioritized_replay = config.get('use_prioritized_replay', True)  # Use prioritized replay buffer
-        self.update_after = config.get('update_after', 1000)  # Start updating after this many steps
-        self.update_every = config.get('update_every', 50)  # Update freq (env steps per gradient step)
-        self.use_auxiliary_tasks = config.get('use_auxiliary_tasks', True)  # Use auxiliary tasks
-        self.auxiliary_weight = config.get('auxiliary_weight', 0.5)  # Weight for auxiliary losses
-        self.per_alpha = config.get('per_alpha', 0.6)  # Prioritized replay alpha (how much prioritization to use)
-        self.per_beta_start = config.get('per_beta_start', 0.4)  # Initial importance sampling weight
-        self.per_beta_frames = config.get('per_beta_frames', 100_000)  # Frames over which to anneal beta
+        # 获取算法配置部分
+        algorithm_config = config.get('algorithm', {})
+        training_config = config.get('training', {})
+        
+        # 打印配置加载信息
+        print("\n正在加载SAC算法配置：")
+        
+        # Extract SAC hyperparameters from algorithm section
+        self.gamma = float(algorithm_config.get('gamma', 0.99))  # 折扣因子
+        self.tau = float(algorithm_config.get('tau', 0.005))     # 目标网络更新率
+        self.alpha_lr = float(algorithm_config.get('alpha_lr', 3e-4))  # 熵温度学习率
+        self.actor_lr = float(algorithm_config.get('actor_lr', 3e-4))  # Actor学习率
+        self.critic_lr = float(algorithm_config.get('critic_lr', 3e-4))  # Critic学习率
+        
+        print(f"  - gamma: {self.gamma}")
+        print(f"  - tau: {self.tau}")
+        print(f"  - 学习率: actor={self.actor_lr}, critic={self.critic_lr}, alpha={self.alpha_lr}")
+        # 从配置中获取回放缓冲区大小，正确阅读嵌套结构
+        replay_buffer_config = algorithm_config.get('replay_buffer', {})
+        self.buffer_size = replay_buffer_config.get('capacity', 50000)  # 首选配置文件中的值，如果不存在则使用较小默认值
+        print(f"  - 回放缓冲区大小: {self.buffer_size}")
+        # 从training部分获取训练相关参数
+        self.batch_size = training_config.get('batch_size', 256)  # 批量大小
+        self.update_after = training_config.get('update_after', 1000)  # 开始更新前的环境步数
+        self.update_every = training_config.get('update_every', 50)  # 更新频率(每多少环境步进行一次梯度更新)
+        
+        # 从algorithm部分获取SAC特定设置
+        self.init_alpha = algorithm_config.get('init_alpha', 0.2)  # 初始熵系数
+        self.target_update_interval = algorithm_config.get('target_update_interval', 1)  # 目标网络更新频率
+        self.use_automatic_entropy_tuning = algorithm_config.get('automatic_entropy_tuning', True)  # 是否自动调整熵系数
+        
+        # 从回放缓冲区配置中获取是否使用PER
+        self.use_prioritized_replay = replay_buffer_config.get('use_per', True)  # 是否使用优先经验回放
+        
+        # 从辅助任务配置获取辅助任务相关参数
+        auxiliary_config = algorithm_config.get('auxiliary', {})
+        self.use_auxiliary_tasks = auxiliary_config.get('use_auxiliary', True)  # 是否使用辅助任务
+        
+        # 辅助任务权重
+        self.auxiliary_weights = {
+            'contrastive': auxiliary_config.get('contrastive_weight', 0.1),
+            'reconstruction': auxiliary_config.get('reconstruction_weight', 0.05),
+            'pose': auxiliary_config.get('pose_prediction_weight', 0.05)
+        }
+        
+        print(f"  - batch_size: {self.batch_size}")
+        print(f"  - update_after: {self.update_after}, update_every: {self.update_every}")
+        print(f"  - 初始alpha: {self.init_alpha}, 自动调整熵: {self.use_automatic_entropy_tuning}")
+        print(f"  - 使用优先经验回放: {self.use_prioritized_replay}")
+        print(f"  - 使用辅助任务: {self.use_auxiliary_tasks}, 权重: {self.auxiliary_weights}")
+        # 从配置文件获取PER相关参数，正确处理嵌套结构
+        self.per_alpha = replay_buffer_config.get('per_alpha', 0.6)  # 优先经验回放alpha参数
+        self.per_beta_start = replay_buffer_config.get('per_beta_start', 0.4)  # 初始IS权重
+        self.per_beta_frames = replay_buffer_config.get('per_beta_frames', 100_000)  # beta增长周期
+        
+        print(f"  - PER参数: alpha={self.per_alpha}, beta_start={self.per_beta_start}, beta_frames={self.per_beta_frames}")
+        print("配置加载完成\n")
         
         # Initialize SAC networks and get their config
         model_config = self.config.get('model', {})

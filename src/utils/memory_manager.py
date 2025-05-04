@@ -103,15 +103,50 @@ class MemoryManager:
                 stats['gpu_error'] = str(e)
         
         # 收集XPU统计信息（如果可用）
-        if self.use_xpu and hasattr(torch.xpu, 'memory_allocated'):
+        if self.use_xpu:
             try:
-                stats['xpu_used'] = torch.xpu.memory_allocated() / (1024**3)  # GB
+                # 首先尝试使用PyTorch API获取基础信息
+                if hasattr(torch.xpu, 'memory_allocated'):
+                    stats['xpu_allocated'] = torch.xpu.memory_allocated() / (1024**3)  # GB
                 if hasattr(torch.xpu, 'memory_reserved'):
                     stats['xpu_reserved'] = torch.xpu.memory_reserved() / (1024**3)  # GB
-                if hasattr(torch.xpu, 'max_memory_allocated') and torch.xpu.max_memory_allocated() > 0:
-                    stats['xpu_percent'] = torch.xpu.memory_allocated() / torch.xpu.max_memory_allocated()
-                else:
-                    stats['xpu_percent'] = 0
+                
+                # 然后尝试使用系统级命令获取真实使用情况
+                try:
+                    import subprocess
+                    import re
+                    
+                    # 通过Intel工具获取XPU内存使用情况
+                    result = subprocess.run(['xpu-smi', '-m'], capture_output=True, text=True, check=False)
+                    if result.returncode == 0:
+                        # 解析输出以获取内存使用统计
+                        output = result.stdout
+                        memory_match = re.search(r'Used\s+:\s+(\d+)\s+MiB', output)
+                        if memory_match:
+                            stats['xpu_used'] = float(memory_match.group(1)) / 1024  # 转换为GB
+                        
+                        total_match = re.search(r'Total\s+:\s+(\d+)\s+MiB', output)
+                        if total_match and memory_match:
+                            total = float(total_match.group(1))
+                            used = float(memory_match.group(1))
+                            stats['xpu_percent'] = used / total if total > 0 else 0
+                            stats['xpu_total'] = total / 1024  # 转换为GB
+                    else:
+                        # 如果命令失败，回退到PyTorch提供的数据
+                        if 'xpu_allocated' in stats and hasattr(torch.xpu, 'max_memory_allocated') and torch.xpu.max_memory_allocated() > 0:
+                            stats['xpu_used'] = stats['xpu_allocated']
+                            stats['xpu_percent'] = stats['xpu_allocated'] / (torch.xpu.max_memory_allocated() / (1024**3))
+                        else:
+                            stats['xpu_used'] = stats.get('xpu_allocated', 0)  # 默认使用分配的内存
+                            stats['xpu_percent'] = 0
+                except (ImportError, FileNotFoundError):
+                    # 如果无法使用系统命令，回退到PyTorch提供的数据
+                    if 'xpu_allocated' in stats:
+                        stats['xpu_used'] = stats['xpu_allocated']
+                        if hasattr(torch.xpu, 'max_memory_allocated') and torch.xpu.max_memory_allocated() > 0:
+                            stats['xpu_percent'] = stats['xpu_used'] / (torch.xpu.max_memory_allocated() / (1024**3))
+                        else:
+                            stats['xpu_percent'] = 0
             except (RuntimeError, AttributeError) as e:
                 stats['xpu_error'] = str(e)
                 

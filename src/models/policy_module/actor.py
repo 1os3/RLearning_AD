@@ -21,11 +21,9 @@ class Actor(nn.Module):
         """
         super().__init__()
         
-        # 定义默认参数
-        self.trunk_dim = 512  # 默认值
-        
-        # 如果没有提供配置，从文件加载
+        # 使用更简洁的配置加载方式
         if config is None:
+            # 如果没有提供配置，加载默认配置文件
             config_path = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
                 "config", "default.yaml"
@@ -33,36 +31,38 @@ class Actor(nn.Module):
             with open(config_path, 'r') as f:
                 full_config = yaml.safe_load(f)
             
-            # 从完整配置中提取trunk_dim和其他参数
-            if 'model' in full_config and 'policy_module' in full_config['model']:
-                self.trunk_dim = full_config['model']['policy_module'].get('trunk_dim', 512)
-                
-            # 提取actor节点
-            if 'model' in full_config and 'policy_module' in full_config['model'] and 'actor' in full_config['model']['policy_module']:
-                config = full_config['model']['policy_module']['actor']
-            else:
-                config = {}
-                print("\u8b66告: 未找到完整的Actor配置节点，使用默认值")
-        
-        # 从提供的完整配置中获取trunk_dim
-        elif isinstance(config, dict) and 'trunk_dim' in config:
-            self.trunk_dim = config.get('trunk_dim', 512)
-        
-        # 获取参数
-        # 从配置文件中获取trunk_dim
-        self.trunk_dim = config.get('trunk_dim', 768)  # 默认值与配置文件中的新值相同
+            # 正确从模型配置中提取策略模块配置
+            model_config = full_config.get('model', {})
+            policy_config = model_config.get('policy_module', {})
+            actor_config = policy_config.get('actor', {})
+            
+            # 获取trunk_dim从策略模块级别
+            self.trunk_dim = policy_config.get('trunk_dim', 768)
+            
+            # 使用actor专用配置
+            config = actor_config
+            
+            print(f"Actor从配置文件加载参数")
+            print(f"  - trunk_dim: {self.trunk_dim}")
+        elif isinstance(config, dict):
+            # 如果提供了外部配置，优先使用外部配置中的trunk_dim
+            self.trunk_dim = config.get('trunk_dim', 768)  # 默认值为768
         
         print(f"Actor 参数: trunk_dim={self.trunk_dim}")
-        # 从配置中获取动作空间维度，不再重复设置
+        # 从配置中获取其他参数
         self.action_dim = config.get('action_dim', 4)  # 默认为4维动作：[vx, vy, vz, yaw_rate]
-        self.hidden_dims = config.get('hidden_dims', [512, 384, 256])  # 更新默认值与配置文件一致
-        self.log_std_min = config.get('log_std_min', -20)  # 最小对数标准差
+        self.hidden_dims = config.get('hidden_dims', [768, 512, 384, 256])  # 默认值与配置文件一致
+        self.log_std_min = config.get('log_std_min', -10)  # 最小对数标准差
         self.log_std_max = config.get('log_std_max', 2)     # 最大对数标准差
-        self.activation_name = config.get('activation', 'relu')  # 添加激活函数配置
+        self.activation_name = config.get('activation', 'relu')  # 激活函数
+        self.use_layernorm = config.get('use_layernorm', True)  # 是否使用层归一化
         
-        # 如果配置中有action_dim，则使用配置的值
-        if isinstance(config, dict) and 'action_dim' in config:
-            self.action_dim = config.get('action_dim', 4)
+        # 输出配置信息
+        print(f"  - 动作空间维度: {self.action_dim}")
+        print(f"  - 隐藏层维度: {self.hidden_dims}")
+        print(f"  - 激活函数: {self.activation_name}")
+        print(f"  - log_std范围: [{self.log_std_min}, {self.log_std_max}]")
+        print(f"  - 使用层归一化: {self.use_layernorm}")
             
         print(f"Actor 动作空间维度: {self.action_dim}")
         
@@ -76,57 +76,58 @@ class Actor(nn.Module):
         else:
             raise ValueError(f"Unsupported activation: {self.activation_name}")
         
-        # Build MLP layers
+        # 构建更型施网络
         layers = []
         prev_dim = self.trunk_dim
         
-        for hidden_dim in self.hidden_dims:
+        for i, hidden_dim in enumerate(self.hidden_dims):
             layers.append(nn.Linear(prev_dim, hidden_dim))
+            
+            if self.use_layernorm:
+                layers.append(nn.LayerNorm(hidden_dim))
+                
             layers.append(self.activation)
             prev_dim = hidden_dim
         
+        # 序列模型结构
         self.trunk = nn.Sequential(*layers)
         
-        # Output layers for mean and log_std
-        self.mean = nn.Linear(self.hidden_dims[-1], self.action_dim)
-        self.log_std = nn.Linear(self.hidden_dims[-1], self.action_dim)
+        # 均值头部网络
+        self.mean = nn.Linear(prev_dim, self.action_dim)
+        
+        # 对数标准差头部网络
+        self.log_std = nn.Linear(prev_dim, self.action_dim)
     
     def forward(self, x) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Forward pass through Actor network.
+        Forward pass to compute action distribution parameters.
         
         Args:
-            x: Input tensor of state features (batch_size, fusion_dim) or dict of tensors
+            x: Input tensor from trunk network
             
         Returns:
-            Tuple of:
-                - Mean action of shape (batch_size, action_dim)
-                - Log standard deviation of shape (batch_size, action_dim)
+            Tuple of (mean, std) tensors for Gaussian distribution
         """
-        # 处理字典类型的输入
+        # 处理字典类型输入
         if isinstance(x, dict):
-            # 处理字典类型的输入
+            # 处理字典类型观测的逻辑
             if 'state' in x and 'target' in x:
-                # 将状态和目标向量连接
-                features = torch.cat([x['state'], x['target']], dim=-1)
+                # 如果同时提供了state和target，将它们连接
+                state_features = torch.cat([x['state'], x['target']], dim=-1)
+                x = state_features
             elif 'state' in x:
-                # 仅使用状态向量
-                features = x['state']
+                x = x['state']
             else:
-                raise ValueError("Actor需要'state'组件来生成动作")
-            trunk_input = features
-        else:
-            # 标准Tensor输入，直接使用
-            trunk_input = x
-            
-        # Process through shared trunk
-        x = self.trunk(trunk_input)
+                raise ValueError("Actor需要观测字典中的'state'组件")
         
-        # Compute mean and log_std
-        mean = self.mean(x)
-        log_std = self.log_std(x)
+        # 通过主干网络前向传播
+        features = self.trunk(x)
         
-        # Clamp log_std for stability
+        # 计算均值和对数标准差
+        mean = self.mean(features)
+        log_std = self.log_std(features)
+        
+        # 限制log_std范围以提高数值稳定性
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         
         return mean, log_std

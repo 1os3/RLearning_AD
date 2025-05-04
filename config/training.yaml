@@ -59,7 +59,7 @@ algorithm:
   
   # 经验回放深度调整
   replay_buffer:
-    capacity: 100000   # 增大回放缓冲区大小，改善长期记忆
+    capacity: 50000   # 增大回放缓冲区大小，改善长期记忆
     use_per: true      # 使用优先经验回放
     per_alpha: 0.7     # 提高优先回放重要性，更关注有价值样本
     per_beta_start: 0.5 # 提高初始beta，减轻重要性采样偏差

@@ -30,9 +30,12 @@ class SharedTrunk(nn.Module):
             config = full_config['model']['policy_module']
         
         # Get parameters from config
-        # 自动适配输入维度，如果配置了fusion_dim则使用，否则使用较小的输入维度
-        # 防止维度不匹配错误
-        self.fusion_dim = config.get('fusion_dim', 15)  # 默认值设为15而不是512
+        # 自动适配输入维度，第一次调用时动态设置
+        # 默认值18对应启用所有状态变量时的状态+目标维度
+        self.fusion_dim = config.get('fusion_dim', 18)
+        # 在首次前向传递中动态适应真实输入维度（见forward方法）
+        self.first_forward = True
+        
         self.trunk_dim = config.get('trunk_dim', 768)   # 更新为新的默认值768
         self.hidden_dims = config.get('trunk_hidden_dims', [256, 512, 768])  # 增大隐藏层维度
         self.activation_name = config.get('activation', 'relu')
@@ -53,28 +56,25 @@ class SharedTrunk(nn.Module):
         else:
             raise ValueError(f"Unsupported activation: {self.activation_name}")
         
-        # Build trunk network layers
+        # 将trunk网络构建逐出到独立方法
+        self._build_trunk()
+        
+    def _build_trunk(self):
+        """构建主干网络，可在首次前向传递时动态调整输入维度"""
+        # Build trunk network
         layers = []
-        prev_dim = self.fusion_dim
+        dims = [self.fusion_dim] + self.hidden_dims + [self.trunk_dim]
         
-        for i, hidden_dim in enumerate(self.hidden_dims):
-            layers.append(nn.Linear(prev_dim, hidden_dim))
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i+1]))
             
-            if self.use_layernorm:
-                layers.append(nn.LayerNorm(hidden_dim))
-                
-            layers.append(self.activation)
-            
-            if self.dropout_rate > 0:
-                layers.append(nn.Dropout(self.dropout_rate))
-                
-            prev_dim = hidden_dim
-        
-        # Final output layer to produce trunk features
-        layers.append(nn.Linear(prev_dim, self.trunk_dim))
-        
-        if self.use_layernorm:
-            layers.append(nn.LayerNorm(self.trunk_dim))
+            # No normalization or activation after the final layer
+            if i < len(dims) - 2:
+                if self.use_layernorm:
+                    layers.append(nn.LayerNorm(dims[i+1]))
+                layers.append(self.activation)
+                if self.dropout_rate > 0:
+                    layers.append(nn.Dropout(self.dropout_rate))
             
         layers.append(self.activation)
         
@@ -90,6 +90,19 @@ class SharedTrunk(nn.Module):
         Returns:
             Trunk features for policy and value heads (batch_size, trunk_dim)
         """
+        # 如果是第一次前向传递，检查实际输入维度并定义网络
+        if hasattr(self, 'first_forward') and self.first_forward and x is not None:
+            actual_dim = x.shape[-1]  # 获取实际输入维度
+            
+            if actual_dim != self.fusion_dim:
+                print(f"\n检测到输入维度与配置不符，已自动调整: {self.fusion_dim} -> {actual_dim}")
+                self.fusion_dim = actual_dim
+                # 重新创建Trunk网络
+                self._build_trunk()
+            
+            self.first_forward = False
+            print(f"SharedTrunk 输入维度: {self.fusion_dim}, 输出维度: {self.trunk_dim}")
+        
         return self.trunk(x)
 
 

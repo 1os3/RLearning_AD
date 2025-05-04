@@ -51,8 +51,21 @@ class AirSimDroneEnv(gym.Env):
         # Flag for evaluation mode
         self.evaluation = evaluation
         
-        # 安全访问环境配置
-        env_config = self.config.get('environment', {})
+        # 检查配置结构，兼容两种传递方式
+        if 'environment' in self.config:
+            # 如果完整配置被传入，获取environment部分
+            env_config = self.config.get('environment', {})
+        else:
+            # 如果只传入了environment部分，直接使用
+            env_config = self.config
+            
+        # 打印配置信息便于调试
+        print(f"\n环境配置格式: {'完整配置' if 'environment' in self.config else '仅环境部分'}")
+        
+        # 初始化状态标志以避免重复打印
+        self._config_info_printed = False
+            
+        # 获取各部分配置
         image_config = env_config.get('image', {})
         action_config = env_config.get('action_space', {})
         term_config = env_config.get('termination', {})
@@ -62,6 +75,13 @@ class AirSimDroneEnv(gym.Env):
         self.use_rgb = image_config.get('use_rgb', True)
         self.use_depth = image_config.get('use_depth', False)
         self.keep_original_resolution = image_config.get('keep_original_resolution', True)
+        
+        # 打印图像配置信息
+        print("\n图像采集配置:")
+        print(f"  - 帧堆叠数: {self.frame_stack}")
+        print(f"  - 使用RGB图像: {self.use_rgb}")
+        print(f"  - 使用深度图像: {self.use_depth}")
+        print(f"  - 保持原始分辨率: {self.keep_original_resolution}")
         
         # 初始化图像请求
         self.image_requests = []
@@ -74,6 +94,10 @@ class AirSimDroneEnv(gym.Env):
         self.action_dim = action_config.get('action_dim', 4)
         self.max_velocity = np.array(action_config.get('max_velocity', [5.0, 5.0, 5.0]))
         self.max_yaw_rate = action_config.get('max_yaw_rate', 1.0)
+        # 安全获取设备索引
+        airsim_config = env_config.get('airsim', {})
+        self.device_idx = airsim_config.get('device_idx', 0)
+        print(f"  - 使用设备索引: {self.device_idx}")
         
         # 终止条件
         self.max_steps = term_config.get('max_steps', 1000)
@@ -200,18 +224,27 @@ class AirSimDroneEnv(gym.Env):
         state_dim = 0
         
         # 安全访问状态空间配置
-        state_space_config = self.config.get('environment', {}).get('state_space', {})
+        env_config = self.config.get('environment', {})
+        state_space_config = env_config.get('state_space', {})
+        
+        # 打印配置信息
+        print("\n初始化状态空间配置:")
+        print(f"  - 使用位置: {state_space_config.get('use_position', True)}")
+        print(f"  - 使用速度: {state_space_config.get('use_velocity', True)}")
+        print(f"  - 使用加速度: {state_space_config.get('use_acceleration', True)}")
+        print(f"  - 使用方向: {state_space_config.get('use_orientation', True)}")
+        print(f"  - 使用角速度: {state_space_config.get('use_angular_velocity', True)}")
         
         # 安全访问各个状态标志，默认为False
         if state_space_config.get('use_position', True):
             state_dim += 3  # x, y, z
         if state_space_config.get('use_velocity', True):
             state_dim += 3  # vx, vy, vz
-        if state_space_config.get('use_acceleration', False):
+        if state_space_config.get('use_acceleration', True):
             state_dim += 3  # ax, ay, az
         if state_space_config.get('use_orientation', True):
             state_dim += 3  # roll, pitch, yaw
-        if state_space_config.get('use_angular_velocity', False):
+        if state_space_config.get('use_angular_velocity', True):
             state_dim += 3  # angular velocities
             
         # 确保状态空间至少有一个维度
@@ -366,21 +399,21 @@ class AirSimDroneEnv(gym.Env):
         self.done = False
         
         # 从配置中获取目标点采样参数
-        target_sampling_config = {}
+        env_config = self.config.get('environment', {})
+        target_config = env_config.get('target', {})
         
-        # 尝试不同的配置路径
-        if 'environment' in self.config and 'target_sampling' in self.config['environment']:
-            target_sampling_config = self.config['environment']['target_sampling']
-        elif 'target_sampling' in self.config:
-            target_sampling_config = self.config['target_sampling']
+        # 安全获取目标参数，提供合理默认值
+        xy_min = target_config.get('xy_min', -50)
+        xy_max = target_config.get('xy_max', 50)
+        z_min = target_config.get('z_min', -10)
+        z_max = target_config.get('z_max', -5)
+        min_distance = target_config.get('min_distance', 10)
+        max_distance = target_config.get('max_distance', 50)
         
-        # 安全获取参数，提供默认值
-        xy_min = target_sampling_config.get('xy_min', -50.0)
-        xy_max = target_sampling_config.get('xy_max', 50.0)
-        z_min = target_sampling_config.get('z_min', -20.0)  # AirSim中负值表示向上
-        z_max = target_sampling_config.get('z_max', -50.0)  # 高空目标
-        min_distance = target_sampling_config.get('min_distance', 20.0)
-        max_distance = target_sampling_config.get('max_distance', 80.0)
+        # 记录目标采样配置信息
+        print(f"\n目标采样配置加载自: {'environment.target' if 'target' in env_config else '默认值'}")
+        print(f"  - 采样范围: X/Y=[{xy_min}, {xy_max}], Z=[{z_min}, {z_max}]")
+        print(f"  - 距离范围: [{min_distance}, {max_distance}]m")
         
         # 获取当前位置
         drone_state = self.client.getMultirotorState()
@@ -705,28 +738,21 @@ class AirSimDroneEnv(gym.Env):
         # Initialize state vector
         state = []
         
-        # 安全获取状态空间配置
-        state_space_config = {}
-        
-        # 首先尝试不同的配置路径
-        if 'environment' in self.config and 'state_space' in self.config['environment']:
-            # 原始的配置路径
-            state_space_config = self.config['environment']['state_space']
-        elif 'state_space' in self.config:
-            # 直接在配置根目录下
-            state_space_config = self.config['state_space']
+        # 正确获取状态空间配置
+        if 'environment' in self.config:
+            env_config = self.config.get('environment', {})
         else:
-            # 没有找到配置，使用默认值
-            print("警告: 未找到状态空间配置，使用默认值")
-            state_space_config = {
-                'use_position': True,
-                'use_velocity': True,
-                'use_acceleration': False,
-                'use_orientation': True,
-                'use_angular_velocity': False
-            }
+            env_config = self.config
+            
+        state_space_config = env_config.get('state_space', {})
         
-        # 添加位置（如果配置）
+        # 只有在初次加载时才打印详细配置信息
+        if not hasattr(self, '_config_info_printed') or not self._config_info_printed:
+            # 记录状态空间配置信息
+            is_config_empty = len(state_space_config) == 0
+            print(f"\n状态空间配置加载自: {'environment.state_space' if not is_config_empty else '默认值'}")
+        
+        # 安全访问各个状态标志，默认为False
         if state_space_config.get('use_position', True):
             pos = drone_state.kinematics_estimated.position
             state.extend([pos.x_val, pos.y_val, pos.z_val])
@@ -737,7 +763,7 @@ class AirSimDroneEnv(gym.Env):
             state.extend([vel.x_val, vel.y_val, vel.z_val])
         
         # 添加加速度（如果配置）
-        if state_space_config.get('use_acceleration', False):
+        if state_space_config.get('use_acceleration', True):
             acc = drone_state.kinematics_estimated.linear_acceleration
             state.extend([acc.x_val, acc.y_val, acc.z_val])
         
@@ -749,7 +775,7 @@ class AirSimDroneEnv(gym.Env):
             state.extend([roll, pitch, yaw])
         
         # 添加角速度（如果配置）
-        if state_space_config.get('use_angular_velocity', False):
+        if state_space_config.get('use_angular_velocity', True):
             ang_vel = drone_state.kinematics_estimated.angular_velocity
             state.extend([ang_vel.x_val, ang_vel.y_val, ang_vel.z_val])
         
@@ -843,18 +869,23 @@ class AirSimDroneEnv(gym.Env):
         reached_target = distance_to_target < self.success_distance
         
         # 安全获取奖励配置
-        reward_config = {}
-        
-        # 尝试不同的配置路径
-        if 'environment' in self.config and 'reward' in self.config['environment']:
-            # 原始的配置路径
-            reward_config = self.config['environment']['reward']
-        elif 'reward' in self.config:
-            # 直接在配置根目录下
-            reward_config = self.config['reward']
+        if 'environment' in self.config:
+            env_config = self.config.get('environment', {})
         else:
-            # 没有找到配置，使用默认值
-            print("警告: 未找到奖励配置，使用默认值")
+            env_config = self.config
+            
+        reward_config = env_config.get('reward', {})
+        
+        # 只有在初次加载时才打印奖励配置信息
+        if not hasattr(self, '_config_info_printed') or not self._config_info_printed:
+            is_reward_config_empty = len(reward_config) == 0
+            if not is_reward_config_empty:
+                print(f"\n奖励配置加载自: environment.reward")
+            else:
+                print("\n警告: 未找到奖励配置，使用默认值")
+            
+            # 设置标志表示已打印配置信息
+            self._config_info_printed = True
         
         # 安全地获取各奖励权重，提供默认值
         distance_weight = reward_config.get('distance_weight', 1.0)
@@ -903,10 +934,11 @@ class AirSimDroneEnv(gym.Env):
         
         # 计算与目标高度的差值
         target_height_diff = 0.0
-        if isinstance(self.target_position, np.ndarray):
-            target_height_diff = self.target_position[2] - current_position[2]  # 正值表示远离目标
-        else:
-            target_height_diff = self.target_position[2] - current_position[2]  # 正值表示远离目标
+        if self.target_position is not None:  # 先检查目标是否存在
+            if isinstance(self.target_position, np.ndarray):
+                target_height_diff = self.target_position[2] - current_position[2]  # 正值表示远离目标
+            else:
+                target_height_diff = self.target_position[2] - current_position[2]  # 正值表示远离目标
         
         # 打印当前高度信息（每50步打印一次）
         if self.step_count % 50 == 0:
