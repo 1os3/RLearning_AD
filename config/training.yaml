@@ -5,7 +5,7 @@ _inherit: default.yaml
 
 # 通用设置覆盖
 general:
-  seed: 42
+  seed: 128
   device: xpu  # 使用 Intel XPU加速，可改为cuda使用NVIDIA GPU加速
   log_level: info
   checkpoint_dir: checkpoints/training

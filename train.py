@@ -25,10 +25,13 @@ def set_seed(seed=None):
     Args:
         seed: Random seed to use. If None, uses 42 as default.
     """
-    # 如果未指定种子，使用默认值
+    # 种子永远不应该是None，因为我们在main中已处理默认值
+    # 这里作为安全检查，仍然提供默认值
     if seed is None:
         seed = 42
-        print(f"警告: 未指定随机种子，使用默认值 {seed}")
+        print(f"警告: 未能正确读取随机种子，使用默认值 {seed}")
+    else:
+        print(f"设置随机种子: {seed}")
     
     # 设置所有随机种子
     random.seed(seed)
@@ -191,17 +194,20 @@ def main():
     # Parse arguments
     args = parse_args()
     
-    # Set random seed
-    set_seed(args.seed)
-    
     # Load config with inheritance support
     config = load_config_with_inheritance(args.config)
+    
+    # 确定要使用的种子: 命令行参数优先，其次是配置文件，最后是默认值
+    seed = args.seed if args.seed is not None else config.get('general', {}).get('seed', 42)
+    
+    # 设置随机种子
+    set_seed(seed)
     
     # Update config with command line arguments (only if values are provided)
     if args.total_steps is not None:
         config['training']['total_steps'] = args.total_steps
-    if args.seed is not None:
-        config['general']['seed'] = args.seed
+    # 已经处理过种子，确保配置文件与使用的种子一致
+    config['general']['seed'] = seed
     if args.save_freq is not None:
         config['training']['save_interval'] = args.save_freq
     if args.eval_freq is not None:
